@@ -56,7 +56,8 @@
       ? katex.renderToString(text, { displayMode: display, throwOnError: false })
       : `<code>${esc(display ? `\\[${text}\\]` : `\\(${text}\\)`)}</code>`;
 
-    md.block.ruler.before('paragraph', 'math_block', (state, start, end, silent) => {
+    // the first block rule: else a line "=" or "-" in a formula makes a heading, a list or a rule of the lines
+    md.block.ruler.before('table', 'math_block', (state, start, end, silent) => {
       if (state.sCount[start] - state.blkIndent >= 4) return false;
       const line = n => state.src.slice(state.bMarks[n] + state.tShift[n], state.eMarks[n]).trimEnd();
       const first = line(start), [open, close] = DISPLAY.find(([o]) => first.startsWith(o)) || [];

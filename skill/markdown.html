@@ -6,6 +6,7 @@
 <title>{page}</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css@5.8.1/github-markdown.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css">
 <style>
   :root { --bg: #fff; --fg: #1f2328; --link: #0969da; --line: #d0d7de; --muted: #59636e; --mark: #9a6700; --error: #cf222e; color-scheme: light dark; }
   @media (prefers-color-scheme: dark) { :root { --bg: #0d1117; --fg: #f0f6fc; --link: #4493f8; --line: #3d444d; --muted: #9198a1; --mark: #d29922; --error: #f85149; } }
@@ -17,6 +18,8 @@
   .file b { color: var(--fg); font-weight: 600; }
   .error { font: 12px ui-monospace, monospace; color: var(--error); margin-bottom: 16px; }
   .front-matter { font-size: 12px; color: var(--muted); }
+  .math-block { margin-bottom: 16px; overflow-x: auto; overflow-y: hidden; }
+  .math-block .katex-display { margin: 0; }
 
   /* the edit buttons of a block, in the left margin: ✎ the block; further left, § the whole section of a heading
      and ≡ the whole list. A list item has the list indent too, so its ✎ is next to the ≡ of its list. */
@@ -48,6 +51,7 @@
 <body>
 <main class="markdown-body"><nav class="file"></nav><div class="error" hidden></div><div class="doc"></div></main>
 <script src="https://cdn.jsdelivr.net/npm/markdown-it@14.1.0/dist/markdown-it.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js"></script>
 <script src="/__review/markdown.js" data-page="{page}" data-models="{models}" data-project="{project}"></script>
 </body>
 </html>

@@ -2,6 +2,7 @@
 // A block: a top-level block of the file, or an item of a top-level list. It knows its lines in the file.
 // A heading has a second button for its whole section (up to the next heading of the same or a higher level),
 // and a top-level list has a button for the whole list.
+// LaTeX math, \[ … \], $$ … $$ and \( … \), is rendered with KaTeX.
 // "Save" sends the edit to the server: the server changes the file at once, and a note asks the agent to finish the edit.
 // When the file changes, the panel sends `review:changed`, and the view renders the file again.
 (() => {
@@ -40,6 +41,54 @@
     md.renderer.rules.review_close = () => '</div>';
     const item = md.renderer.rules.list_item_open || ((tokens, i, options, env, self) => self.renderToken(tokens, i, options));
     md.renderer.rules.list_item_open = (tokens, i, ...rest) => item(tokens, i, ...rest) + (tokens[i].attrGet('data-from') === null ? '' : BUTTON);
+    math(md);
+  }
+
+  // ---- Math ----
+
+  // LaTeX math as LLMs and Pandoc write it: \[ … \] and $$ … $$ are display formulas, \( … \) is a formula in the text.
+  // \[ or $$ at the start of a line opens a block, and the block ends at the line that ends with \] or $$;
+  // a blank line breaks it. In the middle of a line, \[ … \] and $$ … $$ stay text: "\[1\]" is often a pair of escaped brackets.
+  // KaTeX renders the formulas; without KaTeX, the view shows their source.
+  function math(md) {
+    const DISPLAY = [['\\[', '\\]'], ['$$', '$$']];
+    const tex = (text, display) => window.katex
+      ? katex.renderToString(text, { displayMode: display, throwOnError: false })
+      : `<code>${esc(display ? `\\[${text}\\]` : `\\(${text}\\)`)}</code>`;
+
+    md.block.ruler.before('paragraph', 'math_block', (state, start, end, silent) => {
+      if (state.sCount[start] - state.blkIndent >= 4) return false;
+      const line = n => state.src.slice(state.bMarks[n] + state.tShift[n], state.eMarks[n]).trimEnd();
+      const first = line(start), [open, close] = DISPLAY.find(([o]) => first.startsWith(o)) || [];
+      if (!open) return false;
+      const parts = [first.slice(open.length)];
+      let last = start;
+      while (!parts.at(-1).endsWith(close)) {
+        if (++last >= end || state.isEmpty(last) || state.sCount[last] < state.blkIndent) return false;
+        parts.push(line(last));
+      }
+      const text = parts.join('\n').slice(0, -close.length);
+      if (text.includes(close) || !text.trim()) return false;
+      if (silent) return true;
+      const token = state.push('math_block', 'math', 0);
+      Object.assign(token, { block: true, content: text, markup: open, map: [start, last + 1] });
+      state.line = last + 1;
+      return true;
+    }, { alt: ['paragraph', 'reference', 'blockquote', 'list'] });
+
+    // before "escape": else \( becomes (
+    md.inline.ruler.before('escape', 'math_inline', (state, silent) => {
+      const { src, pos } = state;
+      if (!src.startsWith('\\(', pos)) return false;
+      const close = src.indexOf('\\)', pos + 2);
+      if (close < 0 || close + 2 > state.posMax || !src.slice(pos + 2, close).trim()) return false;
+      if (!silent) state.push('math_inline', 'math', 0).content = src.slice(pos + 2, close);
+      state.pos = close + 2;
+      return true;
+    });
+
+    md.renderer.rules.math_block = (tokens, i) => `<div class="math-block">${tex(tokens[i].content, true)}</div>\n`;
+    md.renderer.rules.math_inline = (tokens, i) => tex(tokens[i].content, false);
   }
 
   // the blocks of the parsed tokens; shift: the count of the lines before the parsed text (the front matter); total: the lines of the file

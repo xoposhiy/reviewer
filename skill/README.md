@@ -79,6 +79,14 @@ A Markdown file (`.md`, `.markdown`) opens in the Markdown view: the browser ren
 (from cdn.jsdelivr.net, so the view needs the internet; without it, the view shows the file as text).
 The panel stays open at the right side. `?raw` after the file name gives the file itself.
 
+LaTeX math is rendered with KaTeX (also from cdn.jsdelivr.net):
+
+- `\[` or `$$` at the start of a line opens a display formula, and the line that ends with `\]` or `$$` closes it.
+  A one-line formula `\[ … \]` or `$$ … $$` is a display formula too. A blank line inside the formula makes it text.
+- `\( … \)` is a formula inside a line of text. A single `$` is text: `$5 and $10` stays as it is.
+- `\[ … \]` and `$$ … $$` in the middle of a line stay text, because `\[1\]` is often a pair of escaped brackets.
+- A formula with an error shows its source in red. Without KaTeX, the view shows the source of each formula.
+
 - The path of the file at the top: the project and each folder link to their tables of contents.
 - Each block has the ✎ button in the left margin: a paragraph, a heading, a table, a code block, a quote, an item of a top-level list.
 - Further left, a heading has § (its whole section: up to the next heading of the same or a higher level),

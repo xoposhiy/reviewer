@@ -24,8 +24,16 @@ async function serve(t, mode = 'fix') {
   put('doc.md', '# Doc\r\n\r\nOne line.\r\nTwo line.\r\n\r\n- item\r\n');
   const child = spawn(process.execPath, [SERVER, '--root', root, '--port', '0', '--agent', `"${process.execPath}" "${FAKE}"`],
     { env: { ...process.env, FAKE_AGENT: mode }, windowsHide: true });
-  t.after(() => { child.kill(); rmSync(base, { recursive: true, force: true, maxRetries: 5 }); });
-  const url = await new Promise((ok, fail) => {
+  const exited = new Promise(ok => child.on('exit', ok));
+  let url;
+  // quit, not kill: the server kills its agent too, and on Windows a running agent keeps the folder from deletion
+  t.after(async () => {
+    if (url && child.exitCode === null) await fetch(url + '__review/quit', { method: 'POST' }).catch(() => {});
+    await Promise.race([exited, new Promise(ok => setTimeout(ok, 5000))]);
+    child.kill();
+    rmSync(base, { recursive: true, force: true, maxRetries: 5 });
+  });
+  url = await new Promise((ok, fail) => {
     let out = '';
     child.stdout.on('data', d => { out += d; const m = out.match(/Review server: (\S+)/); if (m) ok(m[1]); });
     child.on('exit', code => fail(new Error(`the server exited: ${code}`)));

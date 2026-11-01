@@ -1,0 +1,11 @@
+{
+  "name": "reviewer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The source of the skill page-review for Claude Code and Codex, and the script that installs it.",
+  "scripts": {
+    "test": "node --test skill/test/server.test.mjs",
+    "deploy": "node scripts/deploy.mjs"
+  },
+  "engines": { "node": ">=20" }
+}

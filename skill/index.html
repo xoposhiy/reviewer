@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { --text: #1f2328; --muted: #6b7280; --faint: #9ca3af; --bg: #fff; --box: #f4f6fa; --hover: #eaf0fb; --line: #dde2ea; --link: #0b57d0;
+    --open: #b42318; --open-bg: #fde8e6; --wip: #8a5a00; --wip-bg: #fdf0d2; --mark: #ffe58a; color-scheme: light dark; }
+  @media (prefers-color-scheme: dark) { :root { --text: #e8ecf3; --muted: #8a93a6; --faint: #5d6678; --bg: #11141b; --box: #181d28; --hover: #212a3b;
+    --line: #2a3142; --link: #9fb6ff; --open: #ff9d8f; --open-bg: #3d2226; --wip: #ffd166; --wip-bg: #3a3020; --mark: #75601a; } }
+  * { box-sizing: border-box; }
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 860px; margin: 0 auto; padding: 24px 16px 64px; color: var(--text); background: var(--bg); }
+  a { color: var(--link); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  button { font: 600 12.5px system-ui, sans-serif; padding: 2px 10px; border-radius: 7px; border: 1px solid var(--line); background: var(--bg); color: var(--text); cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
+  h1 { font-size: 21px; margin: 0 auto 0 0; overflow-wrap: anywhere; }
+  h1 a { color: var(--muted); }
+  .agent { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+  .agent span { max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .agent span::before, .servers .state::before { content: '● '; color: var(--state); }
+  #root { margin: 2px 0 12px; color: var(--faint); font-size: 12.5px; overflow-wrap: anywhere; }
+
+  .search { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 12px; padding: 8px 0; background: var(--bg); }
+  .search input[type=search] { flex: 1; min-width: 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--box); color: inherit;
+    font: 15px system-ui, sans-serif; }
+  .search input[type=search]:focus { outline: 2px solid var(--link); outline-offset: -1px; background: var(--bg); }
+  .search label { font-size: 13px; color: var(--muted); white-space: nowrap; cursor: pointer; }
+
+  section { margin-top: 18px; }
+  h2 { display: flex; align-items: baseline; gap: 8px; margin: 0 0 4px; padding: 0 8px; font-size: 12.5px; font-weight: 700; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--muted); }
+  h2 small { font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--faint); }
+  ul { list-style: none; margin: 0; padding: 0; }
+  .empty { padding: 4px 8px; color: var(--muted); }
+
+  /* one row: the name, the notes, the time */
+  .row { display: flex; align-items: baseline; gap: 10px; padding: 3px 8px; border-radius: 6px; }
+  .row:hover, .row.selected { background: var(--hover); }
+  .row .name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  .row .dir { color: var(--muted); }
+  .row time, .row .count { flex: none; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .row time { min-width: 76px; text-align: right; }
+  .row.ignored .name a { opacity: .6; }
+  .tag { font-size: 11px; color: var(--faint); border: 1px solid var(--line); border-radius: 99px; padding: 0 6px; margin-left: 6px; }
+  .here { font-size: 12px; color: var(--link); margin-left: 6px; white-space: nowrap; }
+  .badge { flex: none; font-size: 12px; font-weight: 600; padding: 0 7px; border-radius: 99px; background: var(--open-bg); color: var(--open); white-space: nowrap; }
+  .badge.wip { background: var(--wip-bg); color: var(--wip); }
+  .note { margin: -2px 8px 6px 8px; font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  mark { background: var(--mark); color: inherit; border-radius: 2px; }
+
+  /* the tree of the folder: a folder is a <details>; its folders and pages are under it, with a guide line */
+  .tree details > ul { margin-left: 15px; padding-left: 8px; border-left: 1px solid var(--line); }
+  .tree summary { list-style: none; cursor: pointer; }
+  .tree summary::-webkit-details-marker { display: none; }
+  .tree summary .name::before { content: '▸'; display: inline-block; width: 14px; color: var(--faint); }
+  .tree details[open] > summary .name::before { content: '▾'; }
+  .tree summary .name { font-weight: 600; }
+  .tree .file .name { padding-left: 14px; }
+  .tree .into { margin-left: 10px; font-size: 12.5px; font-weight: 400; visibility: hidden; }
+  .tree summary:hover .into, .tree summary.selected .into { visibility: visible; }
+
+  footer { margin-top: 36px; border-top: 1px solid var(--line); padding-top: 8px; }
+  footer details { margin: 4px 0; }
+  footer summary { cursor: pointer; padding: 3px 8px; font-size: 13.5px; color: var(--muted); border-radius: 6px; }
+  footer summary:hover { background: var(--hover); }
+  footer .body { padding: 4px 8px 8px 24px; font-size: 14px; }
+  .log { font: 12px/1.45 ui-monospace, monospace; white-space: pre-wrap; max-height: 320px; overflow: auto; margin: 0; color: var(--muted); }
+  .servers li { margin: 6px 0; }
+  .servers .root { overflow-wrap: anywhere; }
+  .servers .line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+  .servers .line span { margin-right: auto; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .keys { margin: 10px 8px 0; font-size: 12.5px; color: var(--faint); }
+  kbd { font: 11.5px ui-monospace, monospace; padding: 0 4px; border: 1px solid var(--line); border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Review</h1>
+  <div class="agent" title="The review agent of this project"><span></span><button></button></div>
+</header>
+<p id="root"></p>
+<div class="search">
+  <input type="search" placeholder="Find a page" autocomplete="off" spellcheck="false" autofocus>
+  <label hidden title="Show the pages that git ignores"><input type="checkbox"> <span></span></label>
+</div>
+<main></main>
+<footer>
+  <details class="output"><summary>Agent output</summary><div class="body"><pre class="log"></pre></div></details>
+  <details class="servers"><summary>Review servers of this computer</summary><div class="body"><ul></ul><p class="muted" hidden></p></div></details>
+  <p class="keys"><kbd>/</kbd> find a page · <kbd>↑</kbd> <kbd>↓</kbd> choose · <kbd>Enter</kbd> open · <kbd>←</kbd> <kbd>→</kbd> close or open a folder · <kbd>Esc</kbd> clear the search</p>
+</footer>
+<script>
+  const STATE_COLOR = { working: '#1a9c5b', stopping: '#d68910', idle: '#888', stopped: '#c0392b', error: '#c0392b' };
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+  const time = t => new Date(t).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  // "just now", "5 min ago", "3 h ago", "yesterday", "4 days ago", "28 Oct"
+  function ago(t) {
+    const s = (Date.now() - t) / 1000;
+    if (s < 60) return 'just now';
+    if (s < 3600) return Math.floor(s / 60) + ' min ago';
+    if (s < 86400) return Math.floor(s / 3600) + ' h ago';
+    if (s < 2 * 86400) return 'yesterday';
+    if (s < 7 * 86400) return Math.floor(s / 86400) + ' days ago';
+    return new Date(t).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  }
+  const when = t => `<time title="${esc(time(t))}">${esc(ago(t))}</time>`;
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  const href = path => '/' + path.split('/').filter(Boolean).map(encodeURIComponent).join('/');
+  const post = path => fetch('/__review/' + path, { method: 'POST' }).then(r => r.json());
+  const sleep = ms => new Promise(ok => setTimeout(ok, ms));
+  // the settings of the reader stay in this browser
+  const remember = (key, value) => { try { localStorage.setItem('review-' + key, JSON.stringify(value)); } catch { } };
+  const recall = (key, value) => { try { return JSON.parse(localStorage.getItem('review-' + key)) ?? value; } catch { return value; } };
+
+  // ---- The pages of the folder ----
+
+  // The table of contents of the folder of this URL: the pages with open notes, the pages changed last
+  // and the tree of the folder. A search over the paths replaces the three lists.
+  const DIR = decodeURIComponent(location.pathname).replace(/^\/|\/$/g, '');
+  const within = p => (DIR ? p.slice(DIR.length + 1) : p);
+  const RECENT = 8, FOUND = 100;
+  const main = document.querySelector('main'), search = document.querySelector('.search input');
+  const ignoredLabel = document.querySelector('.search label'), ignoredBox = ignoredLabel.querySelector('input');
+  ignoredBox.checked = recall('ignored', false);
+  const opened = new Set(recall('folders', []));
+  // the page that the reader came from: its row has a mark
+  const from = (() => {
+    try { const u = new URL(document.referrer); return u.origin === location.origin ? decodeURIComponent(u.pathname.slice(1)) : ''; } catch { return ''; }
+  })();
+
+  let all = [];
+  async function pages() {
+    const r = await fetch('/__review/pages?dir=' + encodeURIComponent(DIR)).catch(() => null);
+    if (!r?.ok) { main.innerHTML = `<p class="empty">${r ? `No folder ${esc(DIR)} in this project.` : 'The server does not answer.'}</p>`; return; }
+    const { root, pages } = await r.json();
+    const project = root.split(/[\\/]/).filter(Boolean).at(-1) || root;
+    const parts = DIR ? DIR.split('/') : [];
+    document.getElementById('title').innerHTML = [parts.length ? `<a href="/">${esc(project)}</a>` : esc(project),
+      ...parts.map((part, i) => i === parts.length - 1 ? esc(part) : `<a href="${href(parts.slice(0, i + 1).join('/'))}/">${esc(part)}</a>`)].join(' / ');
+    document.title = `Review · ${[project, ...parts].join('/')}`;
+    document.getElementById('root').textContent = [root, ...parts].join(root.includes('\\') ? '\\' : '/');
+    all = pages.sort((a, b) => a.path.localeCompare(b.path));
+    const ignored = all.filter(p => p.ignored).length;
+    ignoredLabel.hidden = !ignored;
+    ignoredLabel.querySelector('span').textContent = `git-ignored (${ignored})`;
+    draw();
+  }
+
+  // the path of a page in a list: the folder in grey, then the name; marks: the parts that the search matched
+  function name(path, marks = []) {
+    const at = path.lastIndexOf('/') + 1;
+    return `<span class="dir">${highlight(path.slice(0, at), marks, 0)}</span>${highlight(path.slice(at), marks, at)}`;
+  }
+  const badges = p => (p.open ? `<span class="badge" title="Open notes">${p.open} open</span>` : '') +
+    (p.wip ? `<span class="badge wip" title="The agent works on these notes">${p.wip} in work</span>` : '');
+  // a page: its name, its notes and a time on the right
+  const row = (p, label, t, cls = '') => `<li class="row${cls}${p.ignored ? ' ignored' : ''}"><span class="name"><a class="go" href="${href(p.path)}">${label}</a>` +
+    (p.ignored ? '<span class="tag">ignored</span>' : '') + (p.path === from ? '<span class="here">◂ you were here</span>' : '') +
+    `</span>${badges(p)}${when(t)}</li>`;
+
+  function draw() {
+    const shown = all.filter(p => ignoredBox.checked || !p.ignored);
+    const q = search.value.trim();
+    const html = q ? found(shown, q) : lists(shown);
+    if (html === main.dataset.drawn) return;
+    const keep = mark();
+    main.innerHTML = html;
+    main.dataset.drawn = html;
+    keep();
+  }
+
+  function lists(shown) {
+    // a page with open notes is in this list even when git ignores it
+    const noted = all.filter(p => p.open).sort((a, b) => b.noted.localeCompare(a.noted));
+    const tree = treeOf(shown);
+    // the tree shows every page at once: "Changed last" would repeat it
+    const flat = !Object.keys(tree.dirs).length && shown.length <= RECENT;
+    const recent = [...shown].sort((a, b) => b.mtime - a.mtime).slice(0, RECENT);
+    return (noted.length ? `<section><h2>Open notes <small>${noted.reduce((a, p) => a + p.open, 0)} on ${plural(noted.length, 'page')}</small></h2><ul>` +
+      noted.map(p => row(p, name(within(p.path)), Date.parse(p.noted)) + (p.note ? `<li class="note" title="${esc(p.note)}">“${esc(p.note)}”</li>` : '')).join('') +
+      '</ul></section>' : '') +
+      (flat ? '' : `<section><h2>Changed last</h2><ul>${recent.map(p => row(p, name(within(p.path)), p.mtime)).join('')}</ul></section>`) +
+      `<section class="tree"><h2>All pages <small>${shown.length}</small></h2>${folder(tree, DIR)}</section>`;
+  }
+
+  // the tree of the pages: {dirs: {name: node}, files: [page], count, open, wip, mtime}
+  function treeOf(list) {
+    const top = { dirs: {}, files: [] };
+    for (const p of list) {
+      let node = top;
+      for (const part of within(p.path).split('/').slice(0, -1)) node = node.dirs[part] ??= { dirs: {}, files: [] };
+      node.files.push(p);
+    }
+    (function sum(node) {
+      const kids = Object.values(node.dirs).map(sum);
+      node.count = node.files.length + kids.reduce((a, k) => a + k.count, 0);
+      for (const key of ['open', 'wip']) node[key] = [...node.files, ...kids].reduce((a, k) => a + k[key], 0);
+      node.mtime = Math.max(0, ...node.files.map(p => p.mtime), ...kids.map(k => k.mtime));
+      return node;
+    })(top);
+    return top;
+  }
+
+  // the folders first, then the pages; a folder with only one folder in it is one row: "flags/content/"
+  function folder(node, path) {
+    const dirs = Object.entries(node.dirs).sort(([a], [b]) => a.localeCompare(b)).map(([label, kid]) => {
+      let full = path ? `${path}/${label}` : label;
+      while (!kid.files.length && Object.keys(kid.dirs).length === 1) {
+        const [next, only] = Object.entries(kid.dirs)[0];
+        label += '/' + next; full += '/' + next; kid = only;
+      }
+      return `<li><details data-dir="${esc(full)}"${opened.has(full) ? ' open' : ''}><summary class="row"><span class="name">${esc(label)}/` +
+        `<a class="into" href="${href(full)}/" title="The contents of this folder">open ›</a></span>` +
+        `${badges(kid)}<span class="count">${plural(kid.count, 'page')}</span>${when(kid.mtime)}</summary>${folder(kid, full)}</details></li>`;
+    });
+    const files = node.files.map(p => row(p, esc(p.path.slice(p.path.lastIndexOf('/') + 1)), p.mtime, ' file'));
+    return `<ul>${[...dirs, ...files].join('') || '<li class="empty">No pages in this folder.</li>'}</ul>`;
+  }
+  main.addEventListener('toggle', e => {
+    const dir = e.target.dataset?.dir;
+    if (!dir) return;
+    if (e.target.open) opened.add(dir); else opened.delete(dir);
+    remember('folders', [...opened]);
+  }, true);
+
+  // ---- Search ----
+
+  // Each word of the search is a part of the path. A word in the file name counts more; then the pages changed last go first.
+  function found(shown, q) {
+    const words = q.toLowerCase().split(/\s+/);
+    const hits = shown.map(p => {
+      const path = within(p.path), low = path.toLowerCase(), file = low.slice(low.lastIndexOf('/') + 1);
+      if (!words.every(w => low.includes(w))) return null;
+      const score = words.reduce((a, w) => a + (file.includes(w) ? 2 : 1), 0) + (file.startsWith(words[0]) ? 1 : 0);
+      return { p, path, score, marks: marksOf(low, words) };
+    }).filter(Boolean).sort((a, b) => b.score - a.score || b.p.mtime - a.p.mtime);
+    if (!hits.length) return `<p class="empty">No page matches “${esc(q)}”.</p>`;
+    return `<section><h2>Found <small>${hits.length}</small></h2><ul>${hits.slice(0, FOUND).map(h => row(h.p, name(h.path, h.marks), h.p.mtime)).join('')}</ul>` +
+      (hits.length > FOUND ? `<p class="empty">And ${hits.length - FOUND} more: add a word to the search.</p>` : '') + '</section>';
+  }
+  // the parts of the text that the words match: [from, to) with no overlaps
+  function marksOf(low, words) {
+    const marks = [];
+    for (const w of words) for (let i = low.indexOf(w); i >= 0; i = low.indexOf(w, i + 1)) marks.push([i, i + w.length]);
+    marks.sort((a, b) => a[0] - b[0]);
+    const out = [];
+    for (const m of marks) {
+      if (out.length && m[0] <= out.at(-1)[1]) out.at(-1)[1] = Math.max(out.at(-1)[1], m[1]);
+      else out.push(m);
+    }
+    return out;
+  }
+  // a part of the path that starts at `start`, with the marks of the search
+  function highlight(text, marks, start) {
+    let out = '', at = 0;
+    for (const [a, b] of marks) {
+      const from = Math.max(a - start, at), to = Math.min(b - start, text.length);
+      if (to <= from) continue;
+      out += esc(text.slice(at, from)) + `<mark>${esc(text.slice(from, to))}</mark>`;
+      at = to;
+    }
+    return out + esc(text.slice(at));
+  }
+
+  // ---- Keys ----
+
+  // the rows that the arrows walk through: the visible pages and folders
+  const rows = () => [...main.querySelectorAll('.go, summary')].filter(el => el.getClientRects().length);
+  const rowOf = el => el.closest('.row');
+  const chosen = () => { const r = main.querySelector('.selected'); return r && (r.matches('summary') ? r : r.querySelector('.go')); };
+  function choose(el) {
+    main.querySelector('.selected')?.classList.remove('selected');
+    if (!el) return;
+    rowOf(el).classList.add('selected');
+    rowOf(el).scrollIntoView({ block: 'nearest' });
+  }
+  // the chosen row stays chosen when the lists are drawn again: the same page or folder, the same one of its copies
+  function mark() {
+    const now = chosen();
+    if (!now) return () => {};
+    const key = el => (el.matches('summary') ? 'dir:' + el.parentElement.dataset.dir : el.getAttribute('href'));
+    const k = key(now), nth = rows().filter(el => key(el) === k).indexOf(now);
+    return () => { const same = rows().filter(el => key(el) === k); choose(same[nth] || same[0]); };
+  }
+
+  search.addEventListener('input', () => { draw(); choose(search.value.trim() ? rows()[0] : null); });
+  ignoredBox.addEventListener('change', () => { remember('ignored', ignoredBox.checked); draw(); });
+  addEventListener('keydown', e => {
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
+    const typing = e.target === search, free = typing || e.target === document.body, list = rows(), now = chosen();
+    if (e.key === '/' && !typing) { e.preventDefault(); search.focus(); search.select(); }
+    else if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && free) {
+      e.preventDefault();
+      const i = list.indexOf(now) + (e.key === 'ArrowDown' ? 1 : -1);
+      choose(list[Math.max(0, Math.min(list.length - 1, i))]);
+    }
+    // Enter opens the chosen page, or opens and closes the chosen folder
+    else if (e.key === 'Enter' && free && (now || (typing && list[0]))) { e.preventDefault(); (now || list[0]).click(); }
+    // in the search box, the arrows to the side move the cursor in the text
+    else if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft') && free && now?.matches('summary') && !search.value) {
+      e.preventDefault();
+      now.parentElement.open = e.key === 'ArrowRight';
+    }
+    else if (e.key === 'Escape' && typing) { search.value = ''; draw(); choose(null); }
+  });
+
+  // ---- The agent and the servers ----
+
+  const strip = document.querySelector('.agent'), log = document.querySelector('.log'), button = strip.querySelector('button');
+  function showAgent(a) {
+    strip.style.setProperty('--state', STATE_COLOR[a.state]);
+    strip.querySelector('span').textContent = 'Agent: ' + a.text;
+    strip.querySelector('span').title = a.text;
+    button.textContent = a.action === 'stop' ? 'Stop' : 'Start';
+    button.onclick = () => post('agent/' + a.action).then(showAgent);
+    const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
+    log.textContent = a.log.join('\n') || 'No output yet.';
+    if (atEnd) log.scrollTop = log.scrollHeight;
+  }
+  let gone = false;  // this server was stopped or restarted from this page
+  const agent = () => gone || fetch('/__review/agent').then(r => r.json()).then(showAgent)
+    .catch(() => showAgent({ state: 'error', text: 'The server does not answer.', action: 'start', log: [] }));
+
+  // The review servers of this computer, one per project, with Stop and Restart.
+  const box = document.querySelector('.servers'), list = box.querySelector('ul'), note = box.querySelector('p');
+  const say = text => { note.hidden = !text; note.textContent = text; };
+  let known = [];
+  async function servers() {
+    if (gone) return;
+    const { self, servers } = await fetch('/__review/servers').then(r => r.json()).catch(() => ({ servers: [] }));
+    known = servers;
+    box.querySelector('summary').textContent = `Review servers of this computer (${servers.length})`;
+    list.innerHTML = servers.map(s => `<li style="--state: ${STATE_COLOR[s.agent?.state] || '#888'}"><div class="line">` +
+      `<span><a href="http://localhost:${s.port}/">localhost:${s.port}</a>${s.port === self ? ' <b>(this one)</b>' : ''}</span>` +
+      `<button data-do="stop" data-port="${s.port}">Stop</button><button data-do="restart" data-port="${s.port}">Restart</button></div>` +
+      `<div class="root">${esc(s.root)}</div>` +
+      `<div class="muted">${s.pid ? `<span class="state">${esc(s.agent.text)}</span> · ${s.open} open note(s) · since ${time(s.since)}`
+        : 'An older version of the tool: restart it.'}</div></li>`).join('')
+      || '<li>None.</li>';
+  }
+  // A restart of this server: wait until a new server (another process) answers, then load the page again.
+  async function waitForNew(pid) {
+    for (let i = 0; i < 60; i++) {
+      await sleep(500);
+      const a = await fetch('/__review/hello').then(r => r.json()).catch(() => null);
+      if (a?.root && a.pid !== pid) return location.reload();
+    }
+    say('The server did not start again. See .review/server.log in the project.');
+  }
+  list.onclick = async e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    const port = +b.dataset.port, self = port === +location.port, act = b.dataset.do;
+    if (act === 'stop' && !confirm(`Stop the review server on the port ${port}? The notes stay.`)) return;
+    b.disabled = true;
+    await post(`servers/${act}?port=${port}`).catch(() => {});
+    if (!self) return setTimeout(servers, act === 'restart' ? 3000 : 0);
+    gone = true;
+    if (act === 'stop') return say('This server is stopped. Run `reviewer` in the project folder to start it again.');
+    say('This server restarts…');
+    waitForNew(known.find(s => s.port === port)?.pid);
+  };
+
+  pages(); agent(); servers();
+  setInterval(agent, 3000);
+  setInterval(() => { if (!document.hidden) { pages(); servers(); } }, 10000);
+</script>
+</body>
+</html>

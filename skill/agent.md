@@ -8,6 +8,9 @@ Your session: {session}. Start time: {time}.
   - `ctx`: the place on the page (`where` for people, `hash` opens the place) and the window size `w` × `h`;
   - `el` (optional): the element that the reviewer attached with Alt+click: `text`, `path`, `point` (the click point),
     `stack` (the elements under the point, the topmost first) and `issue` (only in a note about the picker);
+  - `sel` (optional): the text that the reviewer selected on the page before the note: `text` (the selected text,
+    with the spaces squashed, up to 2000 characters) and `path` (the element that holds the whole selection).
+    The note is about this text;
   - `edit` (optional): the reviewer edited a block of a Markdown file in the browser, and the server already wrote the edit
     to the file. `edit.before` is the old text, `edit.after` is the new text, `edit.line` is the line where the new text started.
     Later changes can move it. In such a note, `text` is optional.

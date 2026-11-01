@@ -1,5 +1,6 @@
 // Review panel. The review server adds this script to each HTML page that it serves.
 // The ✎ button: open the panel; Esc: close it. Alt+click on the page: attach the element under the cursor to the note.
+// Text selected on the page goes with the note as a quote.
 // Ctrl+Enter or "Ω Send": send the note to the first model (Opus); Ctrl+Shift+Enter or "Σ Send": to the second model (Sonnet).
 // PAGES.md says what a page does for the panel: it tells its place (window.reviewState) and opens a place from the hash.
 // The panel lives in a shadow root, so the styles of the page and of the panel do not mix,
@@ -81,13 +82,16 @@
     const classes = (n.getAttribute('class') || '').split(/\s+/).filter(Boolean).slice(0, 3);
     return n.localName + (n.id ? '#' + n.id : '') + (n.dataset?.review ? `[${n.dataset.review}]` : '') + classes.map(c => '.' + c).join('');
   }
-  function describe(t, e) {
+  function pathOf(t) {
     const path = [];
     for (let n = t; n && n !== document.body && path.length < 4; n = n.parentElement) path.unshift(label(n));
+    return path.join(' > ');
+  }
+  function describe(t, e) {
     const stack = document.elementsFromPoint(e.clientX, e.clientY)
       .filter(n => n !== host && n !== document.body && n !== document.documentElement).slice(0, 8).map(label);
     const text = squash(t.textContent) || t.getAttribute('alt') || t.getAttribute('aria-label') || '';
-    return { text: text.slice(0, 160), path: path.join(' > '), point: { x: Math.round(e.clientX), y: Math.round(e.clientY) }, stack };
+    return { text: text.slice(0, 160), path: pathOf(t), point: { x: Math.round(e.clientX), y: Math.round(e.clientY) }, stack };
   }
 
   // ---- The panel ----
@@ -122,9 +126,10 @@
     textarea { margin: 8px 14px 0; height: 130px; min-height: 80px; resize: vertical; background: #0b0e14; color: #e8ecf3; border: 1px solid #333c4f;
       border-radius: 9px; padding: 8px 10px; font: 14px/1.4 system-ui, sans-serif; }
     textarea:focus { outline: 1px solid #ffd166; }
-    .attached { margin: 6px 14px 0; font: 12px ui-monospace, monospace; color: #9aa4b8; }
-    .attached .text { color: #e8ecf3; }
-    .attached .remove { border: 0; padding: 0 4px; color: #9aa4b8; }
+    .attached, .quote { margin: 6px 14px 0; font: 12px ui-monospace, monospace; color: #9aa4b8; }
+    .attached .text, .quote .text { color: #e8ecf3; }
+    .quote .text { font: italic 13px system-ui, sans-serif; }
+    .attached .remove, .quote .remove { border: 0; padding: 0 4px; color: #9aa4b8; }
     .attached .picker { display: flex; gap: 6px; margin-top: 4px; }
     .send { display: flex; align-items: center; gap: 8px; padding: 8px 14px 10px; border-bottom: 1px solid #262d3b; }
     .send span { font-size: 12px; color: #6f7a90; margin-right: auto; }
@@ -142,6 +147,7 @@
     li .meta { font-size: 11.5px; color: #6f7a90; }
     li .meta a { font-size: 12px; }
     li .meta a.delete { color: #ffb3a8; }
+    li .quoted { margin: 2px 0 0; font: italic 12.5px system-ui, sans-serif; color: #9aa4b8; overflow-wrap: anywhere; }
     li .reply { margin-top: 4px; color: #8ff0c9; font-size: 13px; white-space: pre-wrap; }
     li .edit { margin-top: 4px; font-size: 12px; }
     li .edit summary { cursor: pointer; color: #ffd166; }
@@ -158,7 +164,8 @@
     <div class="where"><b>Review</b> · <span></span><a href="${esc(CONTENTS)}" title="The table of contents of this folder">☰ Contents</a></div>
     <div class="spent" hidden></div>
     <div class="agent"><span></span><button></button></div>
-    <textarea placeholder="What is wrong here? Alt+click the page to attach an element."></textarea>
+    <textarea placeholder="What is wrong here? Select text on the page to quote it, Alt+click to attach an element."></textarea>
+    <div class="quote" hidden></div>
     <div class="attached" hidden></div>
     <div class="send"><span></span>${Object.entries(MODELS).map(([m, letter]) =>
       `<button data-model="${esc(m)}" title="Send: a ${esc(m)} agent fixes the note">${esc(letter)} Send</button>`).join('')}</div>
@@ -166,7 +173,7 @@
   </div>
   <div class="updated" hidden>The page was updated<button>Reload here</button></div>`;
   const $ = s => root.querySelector(s);
-  const openButton = $('.open-button'), panel = $('.panel'), draft = $('textarea'), attached = $('.attached'), list = $('ol'), hint = $('.send span');
+  const openButton = $('.open-button'), panel = $('.panel'), draft = $('textarea'), attached = $('.attached'), quote = $('.quote'), list = $('ol'), hint = $('.send span');
   const HINT = `Ctrl+Enter: ${MODELS[FIRST]}${SECOND ? ` · +Shift: ${MODELS[SECOND]}` : ''}${DOCK ? '' : ' · Esc: close'}`;
   hint.textContent = HINT;
   document.head.insertAdjacentHTML('beforeend', '<style>[data-review-picked] { outline: 2px solid #ffd166 !important; outline-offset: 2px !important; }' +
@@ -218,7 +225,11 @@
   // Alt+click attaches an element; a plain click outside the panel closes the panel, and the draft stays
   addEventListener('click', e => {
     if (e.composedPath().includes(host)) return;
-    if (!e.altKey) { if (isOpen) show(false); return; }
+    if (!e.altKey) {
+      if (getSelection().isCollapsed) unselect();  // a plain click that selects nothing
+      if (isOpen) show(false);
+      return;
+    }
     e.preventDefault(); e.stopPropagation();
     const target = e.composedPath()[0];
     const t = partOf(target instanceof Element ? target : target.parentElement);
@@ -237,6 +248,31 @@
     else if (b?.dataset.issue) send(FIRST, b.dataset.issue);
   };
 
+  // ---- Quote the selected text ----
+
+  // A click in the panel clears the selection on the page, so the panel keeps the last text that the reader selected.
+  // A new selection replaces it; a plain click on the page that selects nothing, ✕ and "Send" remove it.
+  const QUOTE_MAX = 2000;
+  let selected = null;
+  function unselect() {
+    selected = null;
+    quote.hidden = true;
+  }
+  document.addEventListener('selectionchange', () => {
+    // a selection in the draft, or in a field of the page (the block editor of the Markdown view)
+    if (document.activeElement === host || document.activeElement?.matches('input, textarea, [contenteditable]')) return;
+    const s = getSelection(), text = squash(s.toString());
+    if (!text || !s.rangeCount) return;
+    const common = s.getRangeAt(0).commonAncestorContainer;
+    const t = common instanceof Element ? common : common.parentElement;
+    if (!t || t === host) return;
+    selected = { text: text.slice(0, QUOTE_MAX), path: pathOf(t) };
+    const shown = selected.text.length > 200 ? selected.text.slice(0, 200) + '…' : selected.text;
+    quote.innerHTML = `❝ <span class="text">${esc(shown)}</span> <button class="remove" title="Do not quote it">✕</button>`;
+    quote.hidden = false;
+  });
+  quote.onclick = e => { if (e.target.closest('button')) unselect(); };
+
   // ---- Send a note ----
 
   // issue: a picker button; its task goes before the draft
@@ -246,7 +282,7 @@
     const p = place();
     const el = picked && (issue ? { ...picked, issue } : picked);
     try {
-      await post('notes', { page: PAGE, text, model, el, ctx: { where: where(p), hash: p.hash, w: innerWidth, h: innerHeight } });
+      await post('notes', { page: PAGE, text, model, el, sel: selected, ctx: { where: where(p), hash: p.hash, w: innerWidth, h: innerHeight } });
     } catch (e) {
       hint.textContent = 'Not sent: ' + e.message;
       hint.className = 'error';
@@ -255,6 +291,7 @@
     hint.textContent = HINT; hint.className = '';
     draft.value = ''; keepDraft();
     unpick();
+    unselect();
     show(false);
     refresh();
   }
@@ -297,7 +334,8 @@
     const model = MODELS[n.model] ? `<span class="model" title="${esc(n.model)}">${esc(MODELS[n.model])}</span>` : '';
     const meta = [esc(n.id), esc(n.ctx?.where), n.ctx?.hash && `<a data-go="${esc(bare(n.ctx.hash))}">open here</a>`, esc(spent(n)),
       n.status !== 'wip' && `<a class="delete" data-delete="${esc(n.id)}">delete</a>`].filter(Boolean).join(' · ');
-    return `<li data-id="${esc(n.id)}"><div class="text">${model}${status}${esc(n.text)}</div>${n.edit ? edit(n.edit) : ''}<div class="meta">${meta}</div>` +
+    const quoted = n.sel?.text ? `<div class="quoted">❝ ${esc(n.sel.text.length > 200 ? n.sel.text.slice(0, 200) + '…' : n.sel.text)}</div>` : '';
+    return `<li data-id="${esc(n.id)}"><div class="text">${model}${status}${esc(n.text)}</div>${quoted}${n.edit ? edit(n.edit) : ''}<div class="meta">${meta}</div>` +
       (n.reply ? `<div class="reply">${esc(n.reply)}</div>` : '') + '</li>';
   }
 

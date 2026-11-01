@@ -59,6 +59,8 @@ The server listens only on 127.0.0.1, and it refuses changes from pages of other
 The server adds the panel to each HTML page that it serves.
 
 - The ✎ button: open the panel. `Esc`: close it. "☰ Contents" in the panel: the table of contents of the folder of the page. A click on the page outside the panel closes it too; the draft stays.
+- Select text on the page: the note quotes it. The panel shows the quote under the draft and keeps it when you click in the panel.
+  A new selection replaces the quote. A click on the page that selects nothing, or ✕, removes it.
 - `Alt+click` on the page: attach the element under the cursor to the note.
 - Send the note and close the panel: "Ω Send" or `Ctrl+Enter` gives the note to an Opus agent; "Σ Send" or `Ctrl+Shift+Enter` to a Sonnet agent.
 - Under an attached element, "Can't pick a smaller part" and "Picks the wrong part" send a note at once, to Opus:

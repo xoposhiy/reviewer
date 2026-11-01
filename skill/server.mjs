@@ -217,7 +217,7 @@ const routes = {
   'POST /__review/notes': async (req, res) => {
     const n = await json(req);
     if (typeof n.page !== 'string' || typeof n.text !== 'string' || !n.text.trim()) throw new HttpError(400, 'a note needs a page and a text');
-    const note = await store.add({ page: n.page, text: n.text.trim(), model: modelOf(n.model), ctx: n.ctx, el: n.el || undefined });
+    const note = await store.add({ page: n.page, text: n.text.trim(), model: modelOf(n.model), ctx: n.ctx, el: n.el || undefined, sel: n.sel || undefined });
     agent.kick('new note');
     send(res, 200, note);
   },

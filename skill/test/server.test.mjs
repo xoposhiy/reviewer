@@ -141,7 +141,8 @@ test('the table of contents tells the open notes of each page and the pages that
 
 test('the agent fixes the notes one task after another and resumes its session', async t => {
   const s = await serve(t, 'fix');
-  const n1 = (await s.note({ page: 'a.html', text: 'one', model: 'opus', ctx: { where: 'A', hash: 'a' } })).body;
+  const sel = { text: 'the selected text', path: 'p#intro' };
+  const n1 = (await s.note({ page: 'a.html', text: 'one', model: 'opus', ctx: { where: 'A', hash: 'a' }, sel })).body;
   assert.equal(n1.id, 'n1');
   const fixed = await until(async () => (await page(s, 'a.html')).notes.find(n => n.id === 'n1' && n.cost));
   assert.equal(fixed.status, 'fixed');
@@ -150,6 +151,7 @@ test('the agent fixes the notes one task after another and resumes its session',
   assert.equal(fixed.ms, 3000);
   assert.equal(fixed.agent, 'a1');
   assert.deepEqual(fixed.ctx, { where: 'A', hash: 'a' });
+  assert.deepEqual(fixed.sel, sel);
   // the next note of the same model goes to the same session
   await s.note({ page: 'a.html', text: 'two', model: 'unknown model' });
   const second = await until(async () => (await page(s, 'a.html')).notes.find(n => n.id === 'n2' && n.cost));

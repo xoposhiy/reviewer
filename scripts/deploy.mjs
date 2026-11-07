@@ -12,12 +12,15 @@ const USAGE = `Usage: npm run deploy -- [options]
 Options:
   --only <claude|codex>  install into one agent only (default: both)
   --skip-tests           install without the tests
-  --restart              restart the running review servers, so that they run the new code`;
+  --restart              restart the running review servers, so that they run the new code;
+                         a server whose agent works on notes does not restart: the command lists it
+  --force                with --restart: restart the servers with a working agent too (it stops the agent)`;
 const { values: opt } = parseArgs({
-  options: { only: { type: 'string' }, 'skip-tests': { type: 'boolean' }, restart: { type: 'boolean' },
+  options: { only: { type: 'string' }, 'skip-tests': { type: 'boolean' }, restart: { type: 'boolean' }, force: { type: 'boolean' },
     help: { type: 'boolean', short: 'h' } },
 });
 if (opt.help) { console.log(USAGE); process.exit(0); }
+if (opt.force && !opt.restart) { console.error('--force works only with --restart.'); process.exit(1); }
 
 const SKILL = 'page-review';
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -74,12 +77,23 @@ if (!run('npm', ['install', '-g', '--no-fund', '--no-audit', `"${commandHome}"`]
 
 const { servers } = await import(pathToFileURL(join(commandHome, 'servers.mjs')).href);
 const running = await servers();
+// a restart stops the agent of the server; a server of an older version tells no agent state
+const BUSY_AGENT = new Set(['working', 'stopping']);
+const busy = s => BUSY_AGENT.has(s.agent?.state);
+const show = s => `  http://localhost:${s.port}/  ${s.root}` + (busy(s) ? `\n    agent: ${s.agent.text}` : '');
 if (!running.length) console.log('No review servers run.');
 else if (!opt.restart) {
   console.log('These review servers run the old code until they restart (npm run deploy -- --restart, or reviewer restart in the project):');
-  for (const s of running) console.log(`  http://localhost:${s.port}/  ${s.root}`);
+  for (const s of running) console.log(show(s));
 } else {
-  for (const s of running) {
+  const refused = opt.force ? [] : running.filter(busy);
+  for (const s of running.filter(s => !refused.includes(s))) {
     run(process.execPath, [join(commandHome, 'open.mjs'), 'restart', '--root', s.root, '--port', String(s.port)], { cwd: s.root });
+  }
+  if (refused.length) {
+    console.error('These review servers did not restart: their agent works on notes, and a restart stops it.\n' +
+      'Restart them later, or now with npm run deploy -- --restart --force:');
+    for (const s of refused) console.error(show(s));
+    process.exitCode = 1;
   }
 }

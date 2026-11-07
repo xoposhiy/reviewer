@@ -61,9 +61,9 @@ The server listens only on 127.0.0.1, and it refuses changes from pages of other
 The server adds the panel to each HTML page that it serves. The panel follows the light or dark color scheme of the system.
 
 - The "✎ Note" button at the bottom right: open the panel. The panel opens at the right side of the window, full height, over the page:
-  the page keeps its layout. `Esc` or ✕: close it. A click on the page outside the panel closes it too; the draft stays.
+  the page keeps its layout. `Esc` or ✕: close it. A click on the page outside the panel that selects nothing closes it too; the draft stays.
   "☰ Contents" in the panel: the table of contents of the folder of the page.
-- Select text on the page: the note quotes it. The panel shows the quote under the draft and keeps it when you click in the panel.
+- Select text on the page with the mouse: the panel opens, and the note quotes the text. The panel shows the quote under the draft and keeps it when you click in the panel.
   A new selection replaces the quote. A click on the page that selects nothing, or ✕, removes it.
 - `Alt+click` on the page: attach the element under the cursor to the note.
 - A note points at one thing: a quote or an element. Both stay only when the quote is a part of the element:

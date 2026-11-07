@@ -1,7 +1,7 @@
 // Review panel. The review server adds this script to each HTML page that it serves.
 // The panel lies over the page at the right side, full height. The ✎ button at the bottom right: open the panel;
 // Esc, ✕ or a click on the page: close it. Alt+click on the page: attach the element under the cursor to the note.
-// Text selected on the page goes with the note as a quote.
+// Text selected on the page goes with the note as a quote, and the selection opens the panel.
 // Ctrl+Enter or "Ω Send": send the note to the first model (Opus); Ctrl+Shift+Enter or "Σ Send": to the second model (Sonnet).
 // PAGES.md says what a page does for the panel: it tells its place (window.reviewState) and opens a place from the hash.
 // The panel lives in a shadow root, so the styles of the page and of the panel do not mix,
@@ -396,11 +396,13 @@
     pickedNode = null;
     attached.hidden = true;
   }
-  // Alt+click attaches an element; a plain click outside the panel closes the panel, and the draft stays
+  // Alt+click attaches an element; a plain click outside the panel that selects nothing closes the panel, and the draft stays.
+  // A click that ends a selection does not close it: the selection opens the panel (see "Quote the selected text").
   addEventListener('click', e => {
     if (e.composedPath().includes(host)) return;
     if (!e.altKey) {
-      if (getSelection().isCollapsed) unselect();  // a plain click that selects nothing
+      if (!getSelection().isCollapsed) return;
+      unselect();
       if (isOpen) show(false);
       return;
     }
@@ -432,8 +434,10 @@
   // A click in the panel clears the selection on the page, so the panel keeps the last text that the reader selected.
   // A new selection replaces it; a plain click on the page that selects nothing, ✕ and "Send" remove it.
   // With an attached element, the quote is a part of it: a selection out of the element removes the element.
+  // A new selection with the mouse opens the panel when the mouse button goes up: one selects text to write a note about it.
+  // The panel opens after the click of that mouseup, because the focus on the draft can clear the selection on the page.
   const QUOTE_MAX = 2000;
-  let selected = null, selectedNode = null;
+  let selected = null, selectedNode = null, newSelection = false;
   function unselect() {
     selected = selectedNode = null;
     quote.hidden = true;
@@ -452,7 +456,16 @@
     const shown = selected.text.length > 200 ? selected.text.slice(0, 200) + '…' : selected.text;
     quote.innerHTML = `❝ <span class="text">${esc(shown)}</span> <button class="remove" title="Do not quote it">✕</button>`;
     quote.hidden = false;
+    newSelection = true;
   });
+  addEventListener('mouseup', e => {
+    if (e.composedPath().includes(host) || e.altKey) return;
+    setTimeout(() => {
+      if (!newSelection) return;
+      newSelection = false;
+      if (!DOCK && selected && !getSelection().isCollapsed) show(true);
+    });
+  }, true);
   quote.onclick = e => { if (e.target.closest('button')) unselect(); };
 
   // ---- Send a note ----

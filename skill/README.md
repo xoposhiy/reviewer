@@ -161,6 +161,13 @@ The server runs a headless Claude Code (`claude -p --permission-mode auto`) in t
 
 The page `/` shows the agent status and its output. The server output (`.review/server.log` or the server window) has it too.
 
+The session page (`/__review/session?id=<session>`) shows what one agent session does and did. The panel opens it in a new tab:
+a click on the status of a working agent, on an "in work" status, or on the agent name of a note. The page shows:
+- what the agent does now (a running tool, or the model at work on its next step), and how long it does it;
+- each task of the session with its notes, and each step: the text and the thinking of the model, the tool calls with their input
+  and result. Each step has its time: the model time before the step and the tool time. Steps of 30 s and more are yellow, of 2 min and more red;
+- the totals: the context and its limit, the cost of the ended tasks, the time of the model and of the tools, the tokens, the tools.
+
 ## Files
 
 | File | What it is |
@@ -172,6 +179,8 @@ The page `/` shows the agent status and its output. The server output (`.review/
 | `store.mjs` | The notes and the replies in the data folder. |
 | `agent.mjs` | Runs the agent: the start, the sessions, the cost. |
 | `queue.mjs` | Chooses the notes and the model of the next task. |
+| `session.mjs` | The log of a session: the records of the agent events, and the view of the session page. |
+| `session.html` | The session page. |
 | `agent.md` | The task of the agent. |
 | `panel.js` | The panel in the page. |
 | `markdown.html`, `markdown.js` | The Markdown view. |
@@ -189,5 +198,6 @@ The data folder:
 | `last-id` | the server | The number of the last note, so that the id of a deleted note is not used again. |
 | `agent.json` | the server | The session of each model, the short names of the sessions and the time of the start by itself (`due`). |
 | `agent.log` | the server | The full output of the agents. |
+| `sessions/<session>.jsonl` | the server | The log of each session: its tasks and their steps, with times and token counts ([session.mjs](session.mjs)). |
 | `server.log` | `open.mjs` | The output of the server that `open.mjs` started. |
 | `.gitignore` | the server | `*`: git ignores the data folder. |

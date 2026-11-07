@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { nextTask, STAY_MS } from '../queue.mjs';
+import { recordsOf, viewOf } from '../session.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SERVER = join(HERE, '..', 'server.mjs'), FAKE = join(HERE, 'fake-agent.mjs');
@@ -332,6 +333,73 @@ test('"Looks good" accepts a closed note and keeps its status; DELETE takes it b
 
 const T0 = Date.parse('2026-01-01T10:00:00Z');
 // an open note of the page a.html: the id, the model, the hash of its place and the minute when the reviewer wrote it
+const sessionLog = async (s, id, key = '') => (await s.api(`__review/session/log?id=${encodeURIComponent(id)}&key=${key}`)).body;
+
+test('the session page shows the steps of a running agent and what the agent does now', async t => {
+  const s = await serve(t, 'hang');
+  await s.note({ page: 'a.html', text: 'one', model: 'sonnet' });
+  const a = await until(async () => { const x = (await s.api('__review/agent')).body; return x.state === 'working' && x.session && x; });
+  assert.match((await s.api('__review/session')).body, /<title>Agent session<\/title>/);
+  const log = await until(async () => { const l = await sessionLog(s, a.session); return l.tasks?.[0]?.steps.length === 2 && l; });
+  assert.equal(log.live, true);
+  assert.equal(log.name, 's1');
+  assert.equal(log.model, 'fake-model-1');
+  assert.deepEqual(log.tasks[0].ids, ['n1']);
+  assert.deepEqual(log.tasks[0].steps.map(x => x.kind), ['say', 'tool']);
+  assert.equal(log.tasks[0].steps[1].result, 'the replies');
+  assert.deepEqual(log.doing.kind, 'model');
+  assert.equal(log.notes[0].text, 'one');
+  // the usage of a message counts once, by its last event
+  assert.equal(log.totals.out, 80);
+  assert.equal(log.totals.context, 3000);
+  // nothing changed: the short answer
+  assert.equal((await sessionLog(s, a.session, log.key)).same, true);
+  assert.equal((await s.api('__review/session/log?id=../x')).code, 400);
+  await s.api('__review/agent/stop', { method: 'POST' });
+  const ended = await until(async () => { const l = await sessionLog(s, a.session); return !l.live && l; });
+  assert.equal(ended.doing, null);
+  assert.equal(ended.tasks[0].endWhy, 'button');
+});
+
+test('the session page keeps each task of a resumed session, with its cost', async t => {
+  const s = await serve(t, 'fix');
+  await s.note({ page: 'a.html', text: 'one' });
+  const first = await until(async () => (await page(s, 'a.html')).notes.find(n => n.cost));
+  await s.note({ page: 'a.html', text: 'two' });
+  await until(async () => (await page(s, 'a.html')).notes.find(n => n.id === 'n2' && n.cost));
+  const log = await until(async () => { const l = await sessionLog(s, first.session); return l.tasks.at(-1)?.end && l.tasks.length === 2 && l; });
+  assert.deepEqual(log.tasks.map(x => [x.ids, x.resume, x.cost, x.closed]), [[['n1'], false, 0.5, 1], [['n2'], true, 0.5, 1]]);
+  assert.equal(log.totals.cost, 1);
+  assert.deepEqual(log.totals.tools.Read.calls, 2);
+  assert.equal((await sessionLog(s, 'no-such-session')).found, false);
+});
+
+test('the session view: the time of each step, a hidden thinking, a lost tool call', () => {
+  const records = [
+    { t: 1000, kind: 'task', ids: ['n1'], model: 'opus', why: 'button', resume: false },
+    ...recordsOf({ type: 'assistant', message: { id: 'm1', usage: { input_tokens: 5, output_tokens: 20, output_tokens_details: { thinking_tokens: 15 } },
+      content: [{ type: 'thinking', thinking: '', signature: 'x' }] } }, { t: 4000 }),
+    ...recordsOf({ type: 'assistant', message: { id: 'm1', usage: { input_tokens: 5, output_tokens: 30 },
+      content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'npm   test' } }] } }, { t: 5000 }),
+    ...recordsOf({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: [{ type: 'text', text: 'ok' }] }] } }, { t: 65_000 }),
+    ...recordsOf({ type: 'assistant', message: { id: 'm2', usage: { input_tokens: 7, cache_read_input_tokens: 100, output_tokens: 3 },
+      content: [{ type: 'tool_use', id: 't2', name: 'Read', input: { file_path: 'a.md' } }] } }, { t: 70_000 }),
+  ];
+  const [think, bash, read] = viewOf(records).tasks[0].steps;
+  assert.deepEqual([think.kind, think.text, think.wait, think.usage.thinking], ['think', '', 3000, 15]);
+  assert.deepEqual([bash.brief, bash.wait, bash.run, bash.result], ['npm test', 1000, 60_000, 'ok']);
+  assert.equal(read.wait, 5000);
+  // the server stopped during the task: the call never gets its result
+  const { tasks, doing, totals } = viewOf(records);
+  assert.equal(read.lost, true);
+  assert.equal(doing, null);
+  assert.match(tasks[0].endWhy, /server stopped/);
+  assert.deepEqual([totals.out, totals.context, totals.modelMs, totals.toolMs], [33, 107, 9000, 60_000]);
+  // the agent runs: the open tool call is what it does now
+  const live = viewOf(records, { live: true });
+  assert.deepEqual([live.doing.kind, live.doing.names, live.tasks[0].steps[2].lost], ['tool', ['Read'], undefined]);
+});
+
 const q = (id, model, place, min = +id.slice(1), more = {}) =>
   ({ id, model, page: 'a.html', ctx: at(place), time: new Date(T0 + min * 60_000).toISOString(), status: 'open', ...more });
 // the model and the note ids of the next task

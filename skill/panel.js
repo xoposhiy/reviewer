@@ -3,6 +3,7 @@
 // Esc, ✕ or a click on the page: close it. Alt+click on the page: attach the element under the cursor to the note.
 // Text selected on the page goes with the note as a quote, and the selection opens the panel.
 // While open notes wait and no agent runs, the "▶ Fix" button next to ✎ starts the agent with the panel closed.
+// The agent status of a running agent, each "in work" status and each agent name link to the session page in a new tab.
 // Ctrl+Enter or "Ω Send": send the note to the first model (Opus); Ctrl+Shift+Enter or "Σ Send": to the second model (Sonnet).
 // PAGES.md says what a page does for the panel: it tells its place (window.reviewState) and opens a place from the hash.
 // The panel lives in a shadow root, so the styles of the page and of the panel do not mix,
@@ -262,9 +263,10 @@
     .where a { white-space: nowrap; }
     .spent { padding: 2px 16px 0; font-size: 12px; color: var(--faint); }
     .agent { display: flex; align-items: center; gap: 8px; padding: 8px 16px 0; font-size: 12px; color: var(--muted); }
-    .agent span { margin-right: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .agent span::before, li .status::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 6px; vertical-align: 1px; background: currentColor; }
-    .agent span::before { background: var(--state); }
+    .agent .state { margin-right: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .agent .state:not([href]) { color: inherit; cursor: default; text-decoration: none; }
+    .agent .state::before, li .status::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 6px; vertical-align: 1px; background: currentColor; }
+    .agent .state::before { background: var(--state); }
     .agent .fix, .send button:first-of-type { border-color: var(--fill); background: var(--fill); color: var(--on-fill); font-weight: 600; }
     .agent .fix { white-space: nowrap; }
     .send button + button { border-color: var(--accent); color: var(--accent); font-weight: 600; }
@@ -295,6 +297,7 @@
     li .model { margin-right: 6px; font-weight: 600; color: var(--muted); }
     li .status { margin-right: 8px; font-size: 12px; font-weight: 600; color: var(--faint); white-space: nowrap; }
     li .status.wip { color: var(--accent); }
+    li a.status:hover { text-decoration: underline; }
     li .status.fixed { color: var(--ok); }
     li .status.no, li .status.stuck { color: var(--bad); }
     li .re { margin-right: 6px; font-size: 12px; }
@@ -321,7 +324,7 @@
   <div class="panel" hidden>
     <div class="where"><b>Review</b> · <span title="Your place on the page: a new note keeps it"></span><a href="${esc(CONTENTS)}" title="The table of contents of this folder">☰ Contents</a><button class="close" title="Close the panel (Esc). The draft stays.">✕</button></div>
     <div class="spent" hidden title="What the agents spent on the notes of this page, the archive too: the cost in USD, the count of agent sessions and the time of agent work"></div>
-    <div class="agent"><span></span><button class="fix" hidden></button><button class="toggle"></button></div>
+    <div class="agent"><a class="state" target="_blank" rel="noopener"></a><button class="fix" hidden></button><button class="toggle"></button></div>
     <div class="replying" hidden></div>
     <textarea placeholder="${esc(PLACEHOLDER)}"></textarea>
     <div class="attached" hidden></div>
@@ -536,6 +539,7 @@
     stop: 'Stop the agent and its start by itself. The notes in work go back to the queue.',
     start: 'Start the agent: it takes the open notes, the oldest first. After new notes, it starts by itself again.',
   };
+  const sessionPage = id => '/__review/session?id=' + encodeURIComponent(id);
   // m:ss
   const clock = ms => { const s = Math.ceil(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 
@@ -546,11 +550,12 @@
   function showAgent(a) {
     agent = a;
     autoAt = a.autoIn == null ? null : Date.now() + a.autoIn;
-    const box = $('.agent'), text = box.querySelector('span'), toggle = box.querySelector('.toggle');
+    const box = $('.agent'), text = box.querySelector('.state'), toggle = box.querySelector('.toggle');
     box.style.setProperty('--state', STATE_COLOR[a.state]);
     // one line, so that a long text does not move the list; the full text is in the tooltip
     text.textContent = 'Agent: ' + a.text;
-    text.title = `${a.text}\n\n${STATE_HINT[a.state](a)}`;
+    text.title = `${a.text}\n\n${STATE_HINT[a.state](a)}${a.session ? '\n\nClick: what the agent does now, in a new tab.' : ''}`;
+    if (a.session) text.href = sessionPage(a.session); else text.removeAttribute('href');
     toggle.textContent = a.action === 'stop' ? 'Stop' : 'Start';
     toggle.title = TOGGLE_HINT[a.action];
     toggle.onclick = () => post('agent/' + a.action).then(showAgent).catch(() => {});
@@ -586,9 +591,15 @@
     : `<div class="act"><a data-reply="${esc(n.id)}" title="Write a follow-up to this note: an agent corrects or redoes the fix">Reply</a>` +
       `<a data-accept="${esc(n.id)}" title="The result is good: move the note to the archive at the bottom of the list">Looks good</a></div>`;
   function item(n) {
-    const by = n.agent && n.status !== 'open'
-      ? ` · <span title="Agent session ${esc(n.agent)} ${n.status === 'wip' ? 'works' : 'worked'} on this note">${esc(n.agent)}</span>` : '';
-    const status = `<span class="status ${esc(n.status)}" title="${esc(STATUS_HINT[n.status] || '')}">${esc(STATUS[n.status] || n.status)}${by}</span>`;
+    // in work: the whole status links to the session page; else the agent name does
+    const link = n.session && n.status !== 'open' ? ` href="${esc(sessionPage(n.session))}" target="_blank" rel="noopener"` : '';
+    const wip = n.status === 'wip' && link;
+    const tag = link ? 'a' : 'span';
+    const by = n.agent && n.status !== 'open' ? ` · ${wip ? esc(n.agent)
+      : `<${tag}${link} title="Agent session ${esc(n.agent)} worked on this note${link ? '. Click: its steps, in a new tab' : ''}">${esc(n.agent)}</${tag}>`}` : '';
+    const statusTitle = esc(STATUS_HINT[n.status] || '') + (wip ? '. Click: what the agent does now, in a new tab' : '');
+    const status = wip ? `<a class="status wip"${link} title="${statusTitle}">${esc(STATUS.wip)}${by}</a>`
+      : `<span class="status ${esc(n.status)}" title="${statusTitle}">${esc(STATUS[n.status] || n.status)}${by}</span>`;
     const model = MODELS[n.model] ? `<span class="model" title="Sent to ${esc(agentOf(n.model))}">${esc(MODELS[n.model])}</span>` : '';
     const re = n.re ? `<a class="re" data-show="${esc(n.re)}" title="A reply to note ${esc(n.re)}">↪ ${esc(n.re)}</a>` : '';
     const meta = [esc(n.id), esc(n.ctx?.where), n.ctx?.hash && `<a data-go="${esc(bare(n.ctx.hash))}">open here</a>`, esc(spent(n)),

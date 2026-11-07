@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent session</title>
+<link rel="icon" href="data:,">
+<!-- The session page: what one agent session does and did, step by step, how long each step took, and what the session spent.
+     The panel opens it in a new tab: /__review/session?id=<session>. The data: /__review/session/log (session.mjs, viewOf). -->
+<style>
+  :root { color-scheme: light; --bg: #fff; --fg: #1f2328; --muted: #59636e; --faint: #818b98; --line: #d1d9e0; --box: #f6f8fa;
+    --accent: #0969da; --tint: #0969da14; --ok: #1a7f37; --warn: #9a6700; --warn-bg: #9a670014; --bad: #cf222e; --bad-bg: #cf222e12;
+    --model: #8250df; --tool: #0969da; }
+  @media (prefers-color-scheme: dark) {
+    :root { color-scheme: dark; --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --faint: #6e7681; --line: #30363d; --box: #151b23;
+      --accent: #4493f8; --tint: #4493f81f; --ok: #3fb950; --warn: #d29922; --warn-bg: #d299221a; --bad: #f85149; --bad-bg: #f851491a;
+      --model: #ab7df8; --tool: #4493f8; }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0 auto; max-width: 1100px; padding: 20px 16px 64px; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, sans-serif; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre, .mono { font: 12px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; }
+
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
+  h1 { margin: 0; font-size: 20px; font-weight: 600; }
+  h1 small { margin-left: 8px; font-size: 13px; font-weight: 400; color: var(--muted); }
+  .state { margin-left: auto; font-size: 13px; color: var(--muted); }
+  .state::before { content: ''; display: inline-block; width: 8px; height: 8px; margin-right: 6px; background: var(--faint); }
+  .state.live { color: var(--accent); font-weight: 600; }
+  .state.live::before { background: var(--accent); animation: blink 1.2s ease-in-out infinite; }
+  @keyframes blink { 50% { opacity: .25; } }
+  @media (prefers-reduced-motion: reduce) { .state.live::before { animation: none; } }
+  .id { margin-top: 2px; font-size: 12px; color: var(--faint); overflow-wrap: anywhere; }
+
+  /* what the agent does now: under the header, it stays at the top of the window */
+  .now { position: sticky; top: 0; z-index: 1; margin: 12px 0 0; padding: 8px 12px; border-left: 3px solid var(--accent);
+    background: var(--bg); box-shadow: inset 0 0 0 100vmax var(--tint); font-size: 14px; overflow-wrap: anywhere; }
+  .now b { font-variant-numeric: tabular-nums; }
+  .now.slow { border-color: var(--warn); box-shadow: inset 0 0 0 100vmax var(--warn-bg); }
+  .now.stuck { border-color: var(--bad); box-shadow: inset 0 0 0 100vmax var(--bad-bg); }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; margin: 14px 0 0; }
+  .tile { padding: 8px 12px; background: var(--box); border: 1px solid var(--line); }
+  .tile .label { font-size: 12px; color: var(--muted); }
+  .tile .value { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tile .more { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+  .meter { height: 5px; margin: 4px 0 2px; background: var(--line); }
+  .meter i { display: block; height: 100%; background: var(--accent); }
+  .meter.full i { background: var(--warn); }
+  .tools { grid-column: 1 / -1; }
+  .tools .more { font-size: 13px; color: var(--fg); }
+  .tools .more span { margin-right: 14px; white-space: nowrap; }
+  .tools .more span i { font-style: normal; color: var(--muted); }
+
+  .task { margin-top: 18px; border-top: 1px solid var(--line); }
+  .task > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; padding: 10px 0 6px; cursor: pointer; list-style: none; }
+  .task > summary::-webkit-details-marker { display: none; }
+  .task > summary::before { content: '▸'; color: var(--faint); }
+  .task[open] > summary::before { content: '▾'; }
+  .task > summary b { font-size: 15px; }
+  .task > summary span { font-size: 13px; color: var(--muted); }
+  .task > summary .error { color: var(--bad); }
+  .notes { margin: 0 0 8px 18px; padding: 0; list-style: none; font-size: 13px; }
+  .notes li { margin: 2px 0; overflow-wrap: anywhere; }
+  .notes .tag { margin-right: 6px; font-weight: 600; color: var(--faint); }
+  .notes .tag.wip { color: var(--accent); }
+  .notes .tag.fixed { color: var(--ok); }
+  .notes .tag.no, .notes .tag.stuck { color: var(--bad); }
+  .notes .page { color: var(--muted); }
+
+  /* one step: the time from the task start, the time of the step, the step */
+  ol.steps { margin: 0; padding: 0; list-style: none; }
+  .step { position: relative; display: grid; grid-template-columns: 52px 84px 1fr; gap: 0 10px; padding: 5px 0 7px; border-bottom: 1px solid var(--line); }
+  .step .at { color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; padding-top: 1px; }
+  .step .took { font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; padding-top: 1px; color: var(--muted); }
+  .step .took b { display: block; font-size: 13px; color: var(--fg); }
+  .step.slow .took b { color: var(--warn); }
+  .step.long .took b { color: var(--bad); }
+  .step .body { min-width: 0; }
+  .step .kind { margin-right: 8px; font-size: 12px; font-weight: 600; color: var(--model); }
+  .step.tool .kind { color: var(--tool); }
+  .step.tool.failed .kind, .step .failed-mark { color: var(--bad); }
+  .step .text { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .step.think .text { color: var(--muted); font-style: italic; }
+  .step .brief { overflow-wrap: anywhere; }
+  .step .hidden-text { color: var(--faint); font-style: italic; }
+  .step details { margin-top: 3px; font-size: 12px; }
+  .step details summary { cursor: pointer; color: var(--accent); }
+  .step pre { margin: 4px 0 0; padding: 6px 8px; max-height: 320px; overflow: auto; background: var(--box); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .step pre.error { background: var(--bad-bg); }
+  /* the bar: the part of the model (purple) and of the tool (blue), the longest step of the task is full width */
+  .step .bar { position: absolute; left: 146px; right: 0; bottom: 0; height: 3px; display: flex; pointer-events: none; }
+  .step .bar i { display: block; height: 100%; }
+  .step .bar .m { background: var(--model); opacity: .55; }
+  .step .bar .t { background: var(--tool); opacity: .55; }
+  .step.now { background: var(--tint); }
+  .step.now .took b { color: var(--accent); }
+  .step.lost .took b::after { content: ' ?'; }
+  .empty { margin-top: 24px; color: var(--muted); }
+  .legend { margin-top: 22px; font-size: 12px; color: var(--faint); }
+
+  @media (max-width: 560px) {
+    .step { grid-template-columns: 44px 1fr; }
+    .step .took { grid-column: 1; grid-row: 2; }
+    .step .body { grid-column: 2; grid-row: 1 / span 2; }
+    .step .bar { left: 0; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Agent session<small></small></h1>
+  <div class="state" id="state"></div>
+</header>
+<div class="id" id="id"></div>
+<div class="now" id="now" hidden></div>
+<div class="stats" id="stats" hidden></div>
+<div id="tasks"></div>
+<div class="empty" id="empty" hidden></div>
+<div class="legend">The time of a step: the model time before the step (purple in the bar) and, for a tool call, the time of the tool (blue).
+  The longest step of a task fills the bar. The page asks the server every 2 seconds while the agent works.</div>
+<script>
+(() => {
+  const ID = new URLSearchParams(location.search).get('id') || '';
+  const LIVE_MS = 2000, IDLE_MS = 10_000, SLOW_MS = 30_000, LONG_MS = 120_000;
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+
+  // ---- formats ----
+  const tokens = n => (n < 1000 ? String(n) : n < 1e6 ? `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k` : `${(n / 1e6).toFixed(2)}M`);
+  const usd = x => '$' + (x < 10 ? x.toFixed(2) : x.toFixed(0));
+  function duration(ms) {
+    if (ms < 1000) return `${(ms / 1000).toFixed(1)} s`;
+    const s = Math.round(ms / 1000);
+    if (s < 60) return `${s} s`;
+    const m = Math.floor(s / 60);
+    return m < 60 ? `${m} min ${String(s % 60).padStart(2, '0')} s` : `${Math.floor(m / 60)} h ${m % 60} min`;
+  }
+  // m:ss from the task start
+  const offset = ms => { const s = Math.floor(ms / 1000); return `+${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+  const clock = t => new Date(t).toLocaleTimeString('en-GB');
+  const level = ms => (ms >= LONG_MS ? 'long' : ms >= SLOW_MS ? 'slow' : '');
+  const pageUrl = p => '/' + String(p).split('/').map(encodeURIComponent).join('/');
+
+  // the data and the time of the server, for the clocks of the running step
+  let data = null, key = '', skew = 0;
+  const serverNow = () => Date.now() + skew;
+
+  // ---- the header and the totals ----
+  function showHead() {
+    const d = data, last = d.tasks.at(-1);
+    const model = last?.model ? last.model[0].toUpperCase() + last.model.slice(1) : '';
+    document.title = `${d.name || 'Agent'} · agent session`;
+    $('title').innerHTML = `Agent ${esc(d.name || 'session')}<small>${esc([model, d.model].filter(Boolean).join(' · '))}</small>`;
+    $('id').textContent = `Session ${d.session}`;
+    const state = $('state');
+    state.className = 'state' + (d.live ? ' live' : '');
+    state.textContent = d.live ? `Works now · task ${d.tasks.length}` : last ? `Not running · the last task ended at ${clock(last.end)}` : 'Not running';
+  }
+
+  function tile(label, value, more = '', extra = '') {
+    return `<div class="tile"><div class="label">${label}</div><div class="value">${value}</div>${extra}<div class="more">${more}</div></div>`;
+  }
+  function showStats() {
+    const t = data.totals, box = $('stats');
+    box.hidden = !data.tasks.length;
+    if (box.hidden) return;
+    const share = Math.min(1, t.context / data.limit);
+    const meter = `<div class="meter${share >= 0.8 ? ' full' : ''}" title="At ${tokens(data.limit)} tokens the next task starts a new session"><i style="width:${(share * 100).toFixed(1)}%"></i></div>`;
+    const open = data.live && data.tasks.at(-1).cost == null;
+    const done = data.tasks.filter(x => x.cost != null).length;
+    const ms = data.tasks.reduce((a, x) => a + ((x.end ?? serverNow()) - x.start), 0);
+    const tools = Object.entries(t.tools).sort((a, b) => b[1].ms - a[1].ms)
+      .map(([name, x]) => `<span>${esc(name)} ${x.calls}× <i>${duration(x.ms)}</i></span>`).join('');
+    box.innerHTML = [
+      tile('Context', tokens(t.context), `of ${tokens(data.limit)}: then the next task starts a new session`, meter),
+      tile('Cost', done ? usd(t.cost) : '—', done ? `${done} ended task${done === 1 ? '' : 's'}${open ? '; the running task adds its cost at its end' : ''}`
+        : 'the agent tells the cost of a task at its end'),
+      tile('Time', duration(ms), `model ${duration(t.modelMs)} · tools ${duration(t.toolMs)}`),
+      tile('Output', `${tokens(t.out)} tokens`, t.thinking ? `thinking ${tokens(t.thinking)}` : ''),
+      tile('Input', `${tokens(t.in + t.cacheRead + t.cacheWrite)} tokens`, `cache read ${tokens(t.cacheRead)} · cache write ${tokens(t.cacheWrite)} · no cache ${tokens(t.in)}`),
+      tile('Steps', String(t.steps), t.turns ? `${t.turns} turns in the ended tasks` : ''),
+      tools && `<div class="tile tools"><div class="label">Tools: the calls and their time, the longest first</div><div class="more">${tools}</div></div>`,
+    ].filter(Boolean).join('');
+  }
+
+  // ---- the tasks and their steps ----
+  function stepHtml(s, task, max, i) {
+    const total = s.wait + (s.run || 0);
+    const parts = s.kind === 'tool' ? `<span>model ${duration(s.wait)}</span><br><span>tool ${s.run == null ? (s.lost ? 'no result' : '…') : duration(s.run)}</span>` : '';
+    const bar = max ? `<div class="bar"><i class="m" style="width:${(s.wait / max * 100).toFixed(2)}%"></i>` +
+      `<i class="t" style="width:${((s.run || 0) / max * 100).toFixed(2)}%"></i></div>` : '';
+    const cls = ['step', s.kind, level(total), s.lost && 'lost', s.error && 'failed'].filter(Boolean).join(' ');
+    let body;
+    if (s.kind === 'think') {
+      const n = s.usage?.thinking;
+      body = `<span class="kind">Thinking</span>` + (s.text ? `<span class="text">${esc(s.text)}</span>`
+        : `<span class="hidden-text">The API does not give the text of this thinking${n ? ` · ${tokens(n)} thinking tokens in this message` : ''}.</span>`);
+    } else if (s.kind === 'say') {
+      body = `<span class="kind">Text</span><span class="text">${esc(s.text)}</span>`;
+    } else {
+      const k = `${task}:${i}`;
+      body = `<span class="kind">${esc(s.name)}</span><span class="brief">${esc(s.brief)}</span>${s.error ? ' <span class="failed-mark">· error</span>' : ''}` +
+        `<details data-key="${esc(k)}"${opened.has(k) ? ' open' : ''}><summary>input${s.result != null ? ' and result' : ''}</summary>` +
+        `<pre>${esc(s.input)}</pre>${s.result != null ? `<pre class="${s.error ? 'error' : ''}">${esc(s.result || '(empty)')}</pre>` : ''}</details>`;
+    }
+    return `<li class="${cls}" title="${esc(clock(s.t))}"><span class="at">${offset(s.t - data.tasks[task].start)}</span>` +
+      `<span class="took"><b>${duration(total)}</b>${parts}</span><div class="body">${body}</div>${bar}</li>`;
+  }
+
+  function nowStep(task) {
+    const d = data.doing, since = serverNow() - d.since;
+    const what = d.kind === 'tool' ? `<span class="kind">${esc(d.names.join(', '))}</span><span class="brief">running: ${esc(d.brief)}</span>`
+      : `<span class="kind">Model</span><span class="hidden-text">works on its next step</span>`;
+    return `<li class="step now ${level(since)}"><span class="at">${offset(d.since - task.start)}</span><span class="took"><b data-since="${d.since}">${duration(since)}</b></span>` +
+      `<div class="body">${what}</div></li>`;
+  }
+
+  const NOTE = { open: 'open', wip: 'in work', fixed: 'fixed', no: 'not fixed', stuck: 'stuck' };
+  function taskHtml(x, i) {
+    const last = i === data.tasks.length - 1, live = last && data.live;
+    const ms = (x.end ?? serverNow()) - x.start;
+    const max = Math.max(1, ...x.steps.map(s => s.wait + (s.run || 0)), live && data.doing ? serverNow() - data.doing.since : 0);
+    const facts = [
+      clock(x.start), x.model, x.resume ? 'resumed the session' : 'new session', x.why && `start: ${x.why}`,
+      duration(ms), x.cost != null && usd(x.cost), x.turns && `${x.turns} turns`,
+      `${tokens(x.usage.out)} tokens out`,
+      live ? 'running' : x.endWhy && `ended: ${x.endWhy}${x.closed != null ? `, ${x.closed} note${x.closed === 1 ? '' : 's'} closed` : ''}`,
+    ].filter(Boolean).map(f => `<span>${esc(f)}</span>`).join('');
+    const notes = x.ids.map(id => data.notes.find(n => n.id === id) || { id, text: '(deleted)' })
+      .map(n => `<li><span class="tag ${esc(n.status || '')}">${esc(n.id)} · ${esc(NOTE[n.status] || 'deleted')}</span>` +
+        (n.page ? `<a class="page" href="${esc(pageUrl(n.page))}">${esc(n.page)}</a> · ` : '') + `${esc(n.text)}</li>`).join('');
+    const steps = x.steps.map((s, k) => stepHtml(s, i, max, k)).join('') + (live && data.doing ? nowStep(x) : '');
+    const open = taskOpen.has(i) ? taskOpen.get(i) : last;
+    return `<details class="task" data-task="${i}"${open ? ' open' : ''}><summary><b>Task ${i + 1}</b>${facts}` +
+      (x.error ? `<span class="error">${esc(x.error)}</span>` : '') + `</summary>` +
+      (notes ? `<ul class="notes">${notes}</ul>` : '') + `<ol class="steps">${steps || '<li class="empty">No steps yet.</li>'}</ol></details>`;
+  }
+
+  // the open state of the tasks and of the tool details stays when the page draws them again
+  const taskOpen = new Map(), opened = new Set();
+  document.addEventListener('toggle', e => {
+    const el = e.target;
+    if (el.dataset.task) taskOpen.set(+el.dataset.task, el.open);
+    if (el.dataset.key) el.open ? opened.add(el.dataset.key) : opened.delete(el.dataset.key);
+  }, true);
+
+  function showNow() {
+    const box = $('now'), d = data.doing;
+    box.hidden = !d;
+    if (!d) return;
+    const since = serverNow() - d.since;
+    box.className = 'now ' + ({ long: 'stuck', slow: 'slow' }[level(since)] || '');
+    box.innerHTML = d.kind === 'tool'
+      ? `Now: the tool <b>${esc(d.names.join(', '))}</b> runs${d.brief ? `: ${esc(d.brief)}` : ''} · <b>${duration(since)}</b>`
+      : `Now: the model works on its next step · <b>${duration(since)}</b> since the last output`;
+  }
+
+  // the page follows the end of the log while the reader is at the end, like a terminal
+  const atEnd = () => innerHeight + scrollY >= document.documentElement.scrollHeight - 60;
+  function show() {
+    const follow = atEnd();
+    showHead();
+    showNow();
+    showStats();
+    $('tasks').innerHTML = data.tasks.map(taskHtml).join('');
+    const empty = $('empty');
+    empty.hidden = data.tasks.length > 0;
+    empty.textContent = data.found ? 'No task in this session yet.'
+      : 'This session has no log: it ran before the server kept the logs of the sessions, or its first task did not start yet.';
+    if (follow && data.live) scrollTo(0, document.documentElement.scrollHeight);
+  }
+
+  // the clocks of the running step and of the running task
+  function tick() {
+    if (!data?.live) return;
+    showNow();
+    showStats();
+    document.querySelectorAll('[data-since]').forEach(b => { b.textContent = duration(serverNow() - +b.dataset.since); });
+  }
+
+  let timer = null;
+  async function load() {
+    clearTimeout(timer);
+    try {
+      const r = await fetch(`/__review/session/log?id=${encodeURIComponent(ID)}&key=${encodeURIComponent(key)}`);
+      const body = await r.json();
+      if (!r.ok) throw new Error(body.error || r.statusText);
+      skew = body.now - Date.now();
+      if (!body.same) { data = body; key = body.key; show(); }
+    } catch (e) {
+      if (!data) { $('empty').hidden = false; $('empty').textContent = `The server does not answer: ${e.message}`; }
+    }
+    timer = setTimeout(load, data?.live ? LIVE_MS : IDLE_MS);
+  }
+  if (!ID) { $('empty').hidden = false; $('empty').textContent = 'The link names no session.'; }
+  else { load(); setInterval(tick, 1000); }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && ID) load(); });
+})();
+</script>
+</body>
+</html>

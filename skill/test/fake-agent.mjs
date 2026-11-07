@@ -9,7 +9,12 @@ const repliesFile = field(/Replies: `([^`]+)`/), ids = field(/Your notes: ([\w, 
 const mode = process.env.FAKE_AGENT || 'fix';
 const print = e => console.log(JSON.stringify(e));
 
-print({ type: 'assistant', message: { usage: { input_tokens: 1000, cache_read_input_tokens: 2000 }, content: [{ type: 'text', text: `mode ${mode}` }] } });
+print({ type: 'system', subtype: 'init', model: 'fake-model-1' });
+print({ type: 'assistant', message: { id: 'm1', usage: { input_tokens: 1000, cache_read_input_tokens: 2000, output_tokens: 50 },
+  content: [{ type: 'text', text: `mode ${mode}` }] } });
+print({ type: 'assistant', message: { id: 'm1', usage: { input_tokens: 1000, cache_read_input_tokens: 2000, output_tokens: 80 },
+  content: [{ type: 'tool_use', id: 't1', name: 'Read', input: { file_path: repliesFile } }] } });
+print({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'the replies' }] } });
 if (mode === 'hang') setInterval(() => {}, 1000);
 if (mode === 'fix') {
   const replies = existsSync(repliesFile) ? JSON.parse(readFileSync(repliesFile, 'utf8')) : {};

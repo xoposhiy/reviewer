@@ -1,6 +1,7 @@
 // Review server: serves the HTML pages of a folder and adds the review panel (panel.js) to each page.
 // A Markdown file opens in the Markdown view (markdown.html, markdown.js): an edit of a block changes the file and becomes a note.
 // The notes go to the data folder (store.mjs). The review agent (agent.mjs) fixes them.
+// The session page (session.html) shows what an agent session does: the panel links to it.
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
@@ -9,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { createStore, CLOSED } from './store.mjs';
 import { createAgent, DELAY_MS, modelOf, MODELS } from './agent.mjs';
+import { parseLog, viewOf } from './session.mjs';
 import { hello, PORTS, restartLater, servers, stop } from './servers.mjs';
 
 const SINCE = new Date().toISOString();
@@ -271,6 +273,21 @@ const routes = {
   'DELETE /__review/accept': async (req, res, url) => {
     const r = await store.accept(url.searchParams.get('id'), false);
     send(res, r.error ? 409 : 200, r);
+  },
+  // the session page (session.html): what an agent session did, step by step, and what it spent
+  'GET /__review/session': async (req, res) => send(res, 200, await readFile(join(TOOL, 'session.html')), 'text/html'),
+  // the view of the session log; key: the key of the last answer, the page asks every few seconds and gets {same: true} when nothing changed
+  'GET /__review/session/log': async (req, res, url) => {
+    const id = url.searchParams.get('id') || '';
+    if (!/^[\w-]{1,64}$/.test(id)) throw new HttpError(400, 'not a session id');
+    const text = await readFile(agent.log(id), 'utf8').catch(() => '');
+    const live = agent.live(id), key = `${text.length}:${live}`;
+    if (url.searchParams.get('key') === key) return send(res, 200, { same: true, key, now: Date.now() });
+    const view = viewOf(parseLog(text), { live });
+    const ids = new Set(view.tasks.flatMap(x => x.ids));
+    const about = (await store.notes()).filter(n => ids.has(n.id))
+      .map(n => ({ id: n.id, page: n.page, status: n.status, text: squash(n.text || (n.edit ? `Edit at line ${n.edit.line}` : '')).slice(0, 200) }));
+    send(res, 200, { key, now: Date.now(), session: id, name: agent.name(id) || null, live, limit: agent.limit, found: !!text, notes: about, ...view });
   },
   'GET /__review/agent': async (req, res) => send(res, 200, await agent.status()),
   'POST /__review/agent/start': async (req, res) => { await agent.start(); send(res, 200, await agent.status()); },

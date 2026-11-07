@@ -5,14 +5,16 @@
 // When an agent exits, hangs or the server restarts, the notes that the agent left in `wip` go back to the queue.
 // After MAX_TRIES such stops a note becomes `stuck`, and the agents skip it.
 // The cost and the time of a task are split equally between the notes of the task (the fields `cost`, `ms`, `sessions`).
+// The log of each session (session.mjs) goes to sessions/<session>.jsonl in the data folder: the session page shows it.
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { readFile, writeFile, appendFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
 import { join, relative } from 'node:path';
 import { CLOSED } from './store.mjs';
 import { nextTask } from './queue.mjs';
+import { recordsOf } from './session.mjs';
 
 const MAX_TOKENS = 100_000, HUNG_MS = 15 * 60_000, MAX_TRIES = 2, NEXT_TASK_MS = 2000;
 // The agent starts by itself this long after the last new note: the reviewer often writes several notes in a row,
@@ -34,7 +36,8 @@ const words = s => s.match(/"[^"]*"|\S+/g).map(w => w.replace(/^"(.*)"$/, '$1'))
 // vars: the values of the {placeholders} in the task; command: the agent command, `claude` or a fake agent for tests;
 // delay: the time from the last new note to the start by itself (ms)
 export function createAgent({ root, dir, store, task, vars, command = 'claude', delay = DELAY_MS }) {
-  const STATE = join(dir, 'agent.json'), LOG = join(dir, 'agent.log');
+  const STATE = join(dir, 'agent.json'), LOG = join(dir, 'agent.log'), SESSIONS = join(dir, 'sessions');
+  mkdirSync(SESSIONS, { recursive: true });
   const [cmd, ...pre] = words(command);
   // by: the session of each model and its context size, {opus: {session, tokens}, ...};
   // names: the short name of each session, the first letter of its model and a number of that model (o1, o2, s1, ...),
@@ -88,11 +91,15 @@ export function createAgent({ root, dir, store, task, vars, command = 'claude', 
     say(`${ids(mine)}: ${Number.isFinite(r.cost) ? `$${r.cost.toFixed(2)}, ` : ''}${Math.round(ms / 1000)} s`);
   });
 
+  // a record of the session log of the run
+  const keep = (r, record) => r.trail.write(JSON.stringify(record) + '\n');
+
   const closedIds = async () => new Set((await store.notes()).filter(n => CLOSED.has(n.status)).map(n => n.id));
 
   // one event of `claude -p --output-format stream-json`
   function onEvent(e) {
     run.last = Date.now();
+    for (const r of recordsOf(e, { t: run.last, root })) keep(run, r);
     if (e.type === 'assistant') {
       const u = e.message.usage || {};
       run.slot.tokens = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
@@ -154,7 +161,9 @@ export function createAgent({ root, dir, store, task, vars, command = 'claude', 
       my.session = session;
       error = '';
       cancel();
-      run = { child, model, session, started, slot: my, name: name(session), last: Date.now(), closed, stopped: null };
+      const trail = createWriteStream(join(SESSIONS, session + '.jsonl'), { flags: 'a' }).on('error', e => say('session log not saved: ' + e.message));
+      run = { child, model, session, started, slot: my, name: name(session), last: Date.now(), closed, stopped: null, trail };
+      keep(run, { t: Date.parse(started), kind: 'task', ids: taken, model, why, resume });
       save().catch(e => say('state not saved: ' + e.message));
       say(`start (${why}): ${taken.join(', ')}, ${model}, ${resume ? 'same agent' : 'new agent'}, session ${session.slice(0, 8)}, ${kTokens(my.tokens)}`);
       child.stdin.on('error', () => {});  // the agent can exit before it reads the task
@@ -185,6 +194,7 @@ export function createAgent({ root, dir, store, task, vars, command = 'claude', 
       // the notes that this task closed (compare the ids: the reviewer can delete a closed note during the task)
       closed = [...await closedIds()].filter(id => !r.closed.has(id)).length;
       say(`end: ${why}, ${closed} note(s) closed, ${kTokens(r.slot.tokens)}`);
+      keep(r, { t: Date.now(), kind: 'end', why, closed });
       if (r.slot.tokens >= MAX_TOKENS) say(`the session is full: the next ${r.model} task goes to a new agent`);
       if (code !== 0 || r.slot.tokens >= MAX_TOKENS) Object.assign(r.slot, { session: null, tokens: 0 });
       last = { model: r.model, ended: Date.now() };
@@ -192,6 +202,7 @@ export function createAgent({ root, dir, store, task, vars, command = 'claude', 
     } catch (e) {
       error = e.message;
     } finally {
+      r.trail.end();
       run = null;
     }
     if (r.stopped) {
@@ -234,7 +245,8 @@ export function createAgent({ root, dir, store, task, vars, command = 'claude', 
     else text = 'Idle · ' + Object.entries(MODELS)
       .map(([m, letter]) => `${letter} ${saved.by[m]?.session ? `${name(saved.by[m].session)}, ${kTokens(saved.by[m].tokens)}` : 'no session'}`).join(' · ');
     const open = notes.filter(n => n.status === 'open').length, autoIn = !r && timer ? Math.max(0, saved.due - Date.now()) : null;
-    return { state, text, action: auto && !error ? 'stop' : 'start', open, autoIn, limit: MAX_TOKENS, log: log.slice(-40) };
+    // session: the session of the running agent, for the link to the session page
+    return { state, text, action: auto && !error ? 'stop' : 'start', open, autoIn, limit: MAX_TOKENS, session: r?.session ?? null, log: log.slice(-40) };
   }
 
   return {
@@ -252,5 +264,9 @@ export function createAgent({ root, dir, store, task, vars, command = 'claude', 
     shutdown: () => { if (run) { run.stopped = 'server stopped'; kill(); } },
     status,
     name,
+    // an agent runs the session now
+    live: session => run?.session === session,
+    limit: MAX_TOKENS,
+    log: session => join(SESSIONS, session + '.jsonl'),
   };
 }

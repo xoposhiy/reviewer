@@ -8,7 +8,7 @@ import { basename, dirname, extname, isAbsolute, join, normalize, relative, reso
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { createStore, CLOSED } from './store.mjs';
-import { createAgent, modelOf, MODELS } from './agent.mjs';
+import { createAgent, DELAY_MS, modelOf, MODELS } from './agent.mjs';
 import { hello, PORTS, restartLater, servers, stop } from './servers.mjs';
 
 const SINCE = new Date().toISOString();
@@ -17,12 +17,14 @@ const USAGE = `Usage: node server.mjs [options]
   --root <dir>       the folder with the pages (default: the current folder)
   --port <n>         the port (default: 8765; 0: any free port)
   --data <dir>       the folder for the notes (default: <root>/.review)
-  --agent <command>  the agent command (default: claude); a fake agent for tests`;
+  --agent <command>  the agent command (default: claude); a fake agent for tests
+  --delay <seconds>  the agent starts by itself this long after the last new note (default: ${DELAY_MS / 1000})`;
 const { values: opt } = parseArgs({
   options: { root: { type: 'string' }, port: { type: 'string', default: '8765' }, data: { type: 'string' },
-    agent: { type: 'string', default: 'claude' }, help: { type: 'boolean', short: 'h' } },
+    agent: { type: 'string', default: 'claude' }, delay: { type: 'string', default: String(DELAY_MS / 1000) }, help: { type: 'boolean', short: 'h' } },
 });
 if (opt.help) { console.log(USAGE); process.exit(0); }
+if (!(+opt.delay >= 0)) { console.error(`--delay takes the seconds, 0 or more, not "${opt.delay}".`); process.exit(1); }
 
 const TOOL = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(opt.root ?? '.'), DATA = opt.data ? resolve(opt.data) : join(ROOT, '.review');
@@ -48,10 +50,16 @@ const store = await createStore(DATA);
 await writeFile(join(DATA, '.gitignore'), '*\n', { flag: 'wx' }).catch(e => { if (e.code !== 'EEXIST') throw e; });
 // the values of the {placeholders} in agent.md; the url is known when the server listens
 const vars = { notes: shown(join(DATA, 'notes.jsonl')), replies: shown(join(DATA, 'replies.json')), conventions: shown(join(TOOL, 'PAGES.md')), tool: shown(TOOL) };
-const agent = createAgent({ root: ROOT, dir: DATA, store, vars, command: opt.agent, task: join(TOOL, 'agent.md') });
+const agent = createAgent({ root: ROOT, dir: DATA, store, vars, command: opt.agent, task: join(TOOL, 'agent.md'), delay: +opt.delay * 1000 });
 
 // the notes with the short name of the agent that took each note
 const notes = async () => (await store.notes()).map(n => (n.session ? { ...n, agent: agent.name(n.session) } : n));
+// the session that changes the page now, else the session that changed it last; undefined when no agent touched the page
+async function editorOf(page) {
+  const mine = (await store.notes()).filter(n => n.page === page && n.session);
+  const now = mine.find(n => n.status === 'wip');
+  return (now || mine.sort((a, b) => String(a.started).localeCompare(String(b.started))).at(-1))?.session;
+}
 
 // The paths (from the root) that git ignores. None when the root is not in a git work tree or git is missing.
 function ignoredOf(paths) {
@@ -217,12 +225,15 @@ const routes = {
   'POST /__review/notes': async (req, res) => {
     const n = await json(req);
     if (typeof n.page !== 'string' || typeof n.text !== 'string' || !n.text.trim()) throw new HttpError(400, 'a note needs a page and a text');
-    const note = await store.add({ page: n.page, text: n.text.trim(), model: modelOf(n.model), ctx: n.ctx, el: n.el || undefined, sel: n.sel || undefined });
+    // re: the id of the note that this note replies to
+    if (n.re != null && !(await store.notes()).some(x => x.id === n.re)) throw new HttpError(400, 'no such note to reply to');
+    const note = await store.add({ page: n.page, text: n.text.trim(), model: modelOf(n.model), ctx: n.ctx, el: n.el || undefined, sel: n.sel || undefined,
+      re: n.re ?? undefined });
     agent.kick('new note');
     send(res, 200, note);
   },
   // An edit of a block in the Markdown view: the server changes the file at once, and the note asks the agent to finish the edit.
-  // The text of the note is optional here.
+  // The text of the note is optional here. `note: false` ("Save only"): the server only changes the file.
   'POST /__review/edit': async (req, res) => {
     const e = await json(req);
     const f = typeof e.page === 'string' && MARKDOWN.has(extname(e.page).toLowerCase()) && fileOf(e.page);
@@ -230,18 +241,35 @@ const routes = {
       throw new HttpError(400, 'an edit needs a Markdown page, a line and the text before and after');
     const before = e.before.replace(/\r\n/g, '\n'), after = e.after.replace(/\r\n/g, '\n').replace(/\s+$/, '');
     const r = await serial(async () => {
-      const done = replaceLines(await readFile(f, 'utf8'), e.from, before, after);
-      if (done) await writeFile(f, done.text);
+      const text = await readFile(f, 'utf8'), done = replaceLines(text, e.from, before, after);
+      if (!done) return { conflict: true, text };
+      await writeFile(f, done.text);
       return done;
     });
-    if (!r) throw new HttpError(409, 'the file changed and has no such block now');
-    const note = await store.add({ page: e.page, text: String(e.text ?? '').trim(), model: modelOf(e.model), ctx: e.ctx,
-      edit: { line: r.from + 1, before, after } });
+    const fields = { page: e.page, text: String(e.text ?? '').trim(), model: modelOf(e.model), ctx: e.ctx };
+    // The block changed since the browser read the file, most often because the agent edits this page now.
+    // The reviewer already said what they want, so the agent merges the edit into the current text, in the session that changed the page.
+    if (r.conflict) {
+      const note = await store.add({ ...fields, to: await editorOf(e.page), edit: { line: e.from + 1, before, after, conflict: true } });
+      agent.kick('edit of a changed block');
+      return send(res, 200, { note, text: r.text, conflict: true });
+    }
+    if (e.note === false) return send(res, 200, { text: r.text });
+    const note = await store.add({ ...fields, edit: { line: r.from + 1, before, after } });
     agent.kick('edit');
     send(res, 200, { note, text: r.text });
   },
   'DELETE /__review/notes': async (req, res, url) => {
     const r = await store.remove(url.searchParams.get('id'));
+    send(res, r.error ? 409 : 200, r);
+  },
+  // "Looks good" on a closed note puts it into the archive of the panel; DELETE takes it back
+  'POST /__review/accept': async (req, res, url) => {
+    const r = await store.accept(url.searchParams.get('id'), true);
+    send(res, r.error ? 409 : 200, r);
+  },
+  'DELETE /__review/accept': async (req, res, url) => {
+    const r = await store.accept(url.searchParams.get('id'), false);
     send(res, r.error ? 409 : 200, r);
   },
   'GET /__review/agent': async (req, res) => send(res, 200, await agent.status()),

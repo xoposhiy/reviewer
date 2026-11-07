@@ -1,22 +1,35 @@
 // Review panel. The review server adds this script to each HTML page that it serves.
-// The ✎ button: open the panel; Esc: close it. Alt+click on the page: attach the element under the cursor to the note.
+// The panel lies over the page at the right side, full height. The ✎ button at the bottom right: open the panel;
+// Esc, ✕ or a click on the page: close it. Alt+click on the page: attach the element under the cursor to the note.
 // Text selected on the page goes with the note as a quote.
 // Ctrl+Enter or "Ω Send": send the note to the first model (Opus); Ctrl+Shift+Enter or "Σ Send": to the second model (Sonnet).
 // PAGES.md says what a page does for the panel: it tells its place (window.reviewState) and opens a place from the hash.
 // The panel lives in a shadow root, so the styles of the page and of the panel do not mix,
-// and the keys and clicks in the panel do not go to the page.
-// data-dock (the Markdown view): the panel stays open at the right side. When the page file changes, the panel sends
+// and the keys and clicks in the panel do not go to the page. The panel follows the light or dark color scheme of the system.
+// data-dock (the Markdown view): the panel stays open, and the page gets a margin for it. When the page file changes, the panel sends
 // a cancelable `review:changed` event: a page that shows the new file itself cancels it, and the panel shows no banner.
 // A `review:refresh` event from the page makes the panel ask for the notes at once.
+// "open here" sends a cancelable `review:highlight` event with the note: a page that highlights the note itself cancels it.
 (() => {
   const { page: PAGE, models, dock } = document.currentScript.dataset;
   const DOCK = dock !== undefined;
   const MODELS = JSON.parse(models), [FIRST, SECOND] = Object.keys(MODELS);
-  const POLL_MS = 4000, GO_MS = 300, DOCK_PX = 400;
+  const POLL_MS = 4000, GO_MS = 300, PANEL_PX = 400;
   // the table of contents of the folder of the page
   const CONTENTS = '/' + PAGE.split('/').slice(0, -1).map(encodeURIComponent).map(p => p + '/').join('');
   const STATUS = { open: 'open', wip: 'in work', fixed: 'fixed', no: 'not fixed', stuck: 'stuck' };
+  const STATUS_HINT = {
+    open: 'Open: the note waits for the agent',
+    wip: 'In work: an agent works on this note now',
+    fixed: 'Fixed: the agent changed the files. Its reply says what it changed',
+    no: 'Not fixed: the agent changed nothing. Its reply says why',
+    stuck: 'Stuck: agents stopped twice before the end of the work on this note, so the agents skip it now',
+  };
   const CLOSED = new Set(['fixed', 'no']);
+  // "opus" → "an Opus agent"
+  const agentOf = m => `${/^[aeiou]/i.test(m) ? 'an' : 'a'} ${m[0].toUpperCase() + m.slice(1)} agent`;
+  const SEND_KEYS = ['Ctrl+Enter', 'Ctrl+Shift+Enter'];
+  const OPEN_HINT = 'Review notes', PLACEHOLDER = 'What is wrong here? Select text on the page to quote it, Alt+click to attach an element.';
   const PICKER = {
     'too-big': 'Picker: Alt+click cannot pick a smaller part here. Fix the page markup (PAGES.md, "Elements"), so that Alt+click picks the part under the cursor.',
     wrong: 'Picker: Alt+click picks the wrong element here. Fix the page markup (PAGES.md, "Elements"), so that Alt+click picks the element under the cursor.',
@@ -57,15 +70,132 @@
   // "open here". A page without reviewState(): scroll to the element with this id.
   // A page with it opens the place on `hashchange` (a synthetic one when the hash is the same). When the page is not at the place
   // after GO_MS, the panel reloads it, and the page opens the place from the hash on load.
-  function goTo(hash) {
-    if (place().hash === hash) return;
+  // At the place, the panel highlights what the note is about (mark()); after a reload too.
+  function goTo(hash, note) {
+    if (place().hash === hash) return mark(note);
     if (!dynamic()) {
       document.getElementById(hash)?.scrollIntoView();
-      return history.replaceState(null, '', '#' + hash);
+      history.replaceState(null, '', '#' + hash);
+      return mark(note);
     }
     if (hashNow() === hash) dispatchEvent(new HashChangeEvent('hashchange', { oldURL: location.href, newURL: location.href }));
     else location.hash = hash;
-    setTimeout(() => { if (place().hash !== hash) location.reload(); }, GO_MS);
+    setTimeout(() => {
+      if (place().hash === hash) return mark(note);
+      markAfterReload(note);
+      location.reload();
+    }, GO_MS);
+  }
+
+  // ---- What a note is about ----
+
+  // "open here" highlights for a moment the quoted text of the note, else its attached element, and scrolls to it.
+  // The page can do it itself: it cancels the `review:highlight` event (the Markdown view highlights the block of an edit).
+  // Nothing found: the page stays at the place of the note.
+  const MARK_MS = 2500, FADE_MS = 100, FADE = [0.6, 0.5, 0.4, 0.3, 0.2, 0.1];
+  function mark(note) {
+    if (!note || !dispatchEvent(new CustomEvent('review:highlight', { cancelable: true, detail: note }))) return;
+    if (note.sel?.text && markText(note.sel.text)) return;
+    const n = note.el && findElement(note.el);
+    if (n) { reveal(n.getBoundingClientRect(), n); flashElement(n); }
+  }
+  const MARK = 'review-mark:' + PAGE;
+  function markAfterReload(note) { try { if (note) sessionStorage.setItem(MARK, JSON.stringify(note)); } catch { } }
+  try {
+    const note = JSON.parse(sessionStorage.getItem(MARK));
+    sessionStorage.removeItem(MARK);
+    if (note) addEventListener('load', () => setTimeout(() => mark(note), GO_MS));
+  } catch { }
+
+  const reveal = (rect, n) => { if (rect.top < 0 || rect.bottom > innerHeight) n.scrollIntoView({ block: 'center' }); };
+
+  // The letters of the page with no whitespace, and the text node and the offset of each letter.
+  // No whitespace, because the quote is squashed, and a selection puts line breaks between blocks that the text nodes do not have.
+  function letters() {
+    const out = { text: '', nodes: [], offsets: [] }, chars = [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode: t => (t.parentElement?.closest('script, style, noscript, template, textarea') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+    });
+    for (let t; (t = walker.nextNode());)
+      for (const m of t.data.matchAll(/\S/g)) { chars.push(m[0]); out.nodes.push(t); out.offsets.push(m.index); }
+    out.text = chars.join('');
+    return out;
+  }
+  function markText(quote) {
+    const q = quote.replace(/\s+/g, '');
+    if (!q) return false;
+    const { text, nodes, offsets } = letters();
+    // the agent may have changed the text since the note: then its start or its end shows the place
+    for (const part of new Set([q, q.slice(0, 40), q.slice(-40)])) {
+      const found = [];
+      for (let i = text.indexOf(part); i >= 0 && found.length < 50; i = text.indexOf(part, i + 1)) {
+        const r = document.createRange(), end = i + part.length - 1;
+        r.setStart(nodes[i], offsets[i]);
+        r.setEnd(nodes[end], offsets[end] + 1);
+        if (r.getClientRects().length) found.push(r);
+      }
+      if (!found.length) continue;
+      // of several copies, the one nearest to the middle of the window: the page is at the place of the note now
+      const off = r => Math.abs(r.getBoundingClientRect().top - innerHeight / 2);
+      const best = found.reduce((a, b) => (off(b) < off(a) ? b : a));
+      reveal(best.getBoundingClientRect(), best.startContainer.parentElement);
+      flashRange(best);
+      return true;
+    }
+    return false;
+  }
+
+  // a label of label() as CSS selectors: `full` with the classes, `bare` without them (a class like "active" can change)
+  function selectorOf(l) {
+    const m = l.match(/^([^#[.\s]+)(?:#([^[.]+))?(?:\[([^\]]*)\])?((?:\.[^.]+)*)$/);
+    if (!m) return null;
+    const [, tag, id, name, classes] = m;
+    const bare = CSS.escape(tag) + (id ? '#' + CSS.escape(id) : '') + (name ? `[data-review="${CSS.escape(name)}"]` : '');
+    return { tag: CSS.escape(tag), bare, full: bare + classes.split('.').filter(Boolean).map(c => '.' + CSS.escape(c)).join('') };
+  }
+  // the element of describe(): by its path and its text, by its path, then by its text only
+  function findElement(el) {
+    const all = s => { try { return [...document.querySelectorAll(s)]; } catch { return []; } };
+    const textOf = n => (squash(n.textContent) || n.getAttribute('alt') || n.getAttribute('aria-label') || '').slice(0, 160);
+    const sameText = n => textOf(n) === el.text;
+    const labels = String(el.path || '').split(' > ').map(selectorOf);
+    let byPath = [], loose = [], byText = [];
+    if (labels.every(Boolean)) {
+      // a short path starts at the body
+      const chain = key => (labels.length < 4 ? 'body > ' : '') + labels.map(l => l[key]).join(' > ');
+      byPath = all(chain('full'));
+      loose = all(chain('bare'));
+      if (el.text) byText = all(labels.at(-1).tag).filter(sameText);
+    }
+    const found = el.text ? [...byPath.filter(sameText), ...loose.filter(sameText), ...byPath, ...byText] : byPath;
+    return found.find(n => n.getClientRects().length);
+  }
+
+  document.head.insertAdjacentHTML('beforeend', '<style>' + FADE.map((a, k) => `::highlight(review-mark-${k}) { background-color: rgba(255, 209, 102, ${a}); }`).join('') +
+    '[data-review-mark] { outline: 2px solid #e3a008 !important; outline-offset: 2px !important; }' +
+    `[data-review-mark=fade] { outline-color: transparent !important; transition: outline-color ${FADE_MS * FADE.length}ms; }</style>`);
+
+  let unmark = () => {};
+  // the CSS Custom Highlight API; a browser without it shows no highlight. It fades in steps: a highlight has no transition.
+  function flashRange(range) {
+    unmark();
+    if (!window.CSS?.highlights) return;
+    const h = new Highlight(range);
+    let step = 0, timer;
+    const name = () => 'review-mark-' + step;
+    CSS.highlights.set(name(), h);
+    timer = setTimeout(function fade() {
+      CSS.highlights.delete(name());
+      if (++step < FADE.length) { CSS.highlights.set(name(), h); timer = setTimeout(fade, FADE_MS); }
+    }, MARK_MS);
+    unmark = () => { clearTimeout(timer); CSS.highlights.delete(name()); };
+  }
+  function flashElement(n) {
+    unmark();
+    n.setAttribute('data-review-mark', '');
+    const fade = setTimeout(() => n.setAttribute('data-review-mark', 'fade'), MARK_MS);
+    const end = setTimeout(() => n.removeAttribute('data-review-mark'), MARK_MS + FADE_MS * FADE.length);
+    unmark = () => { clearTimeout(fade); clearTimeout(end); n.removeAttribute('data-review-mark'); };
   }
 
   // ---- The element under the cursor (PAGES.md, "Elements") ----
@@ -99,87 +229,117 @@
   const host = document.createElement('review-panel');
   const root = host.attachShadow({ mode: 'open' });
   root.innerHTML = `<style>
-    :host { all: initial; }
+    :host { all: initial; color-scheme: light; --bg: #fff; --fg: #1f2328; --muted: #59636e; --faint: #818b98; --line: #d1d9e0;
+      --accent: #0969da; --fill: #0969da; --on-fill: #fff; --tint: #0969da14; --ok: #1a7f37; --ok-bg: #1a7f3714; --bad: #cf222e; --bad-bg: #cf222e12; }
+    @media (prefers-color-scheme: dark) {
+      :host { color-scheme: dark; --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --faint: #6e7681; --line: #30363d;
+        --accent: #4493f8; --fill: #1f6feb; --on-fill: #fff; --tint: #4493f81f; --ok: #3fb950; --ok-bg: #3fb9501a; --bad: #f85149; --bad-bg: #f851491a; }
+    }
     * { box-sizing: border-box; }
-    button { font: 600 12px system-ui, sans-serif; cursor: pointer; }
-    a { color: #9fb6ff; cursor: pointer; }
-    .open-button { position: fixed; left: 14px; bottom: 14px; z-index: 2147483000; padding: 8px 13px; border-radius: 99px; border: 1px solid #ffd166;
-      background: #1c1606; color: #ffd166; font: 600 14px system-ui, sans-serif; box-shadow: 0 8px 24px -8px #000; }
-    .open-button i { font-style: normal; margin-left: 6px; padding: 0 7px; border-radius: 99px; background: #ffd166; color: #1c1606; }
-    .panel { position: fixed; left: 14px; bottom: 60px; z-index: 2147483000; width: 400px; max-width: calc(100vw - 28px); max-height: calc(100vh - 90px);
-      display: flex; flex-direction: column; background: #141821; color: #e8ecf3; border: 1px solid #ffd166; border-radius: 14px;
-      box-shadow: 0 20px 50px -14px #000; font: 14px/1.45 system-ui, sans-serif; }
-    .panel.dock { left: auto; right: 0; top: 0; bottom: 0; width: ${DOCK_PX}px; max-width: none; max-height: none; border-width: 0 0 0 1px;
-      border-radius: 0; box-shadow: none; }
     [hidden] { display: none !important; }
+    button { border: 1px solid var(--line); border-radius: 0; padding: 3px 10px; background: none; color: var(--fg); font: 12px/1.4 system-ui, sans-serif; cursor: pointer; }
+    button:hover { border-color: var(--muted); }
+    a { color: var(--accent); cursor: pointer; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    button:focus-visible, a:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+    .open-button, .panel { position: fixed; z-index: 2147483000; }
+    .open-button { right: 16px; bottom: 16px; padding: 7px 12px; background: var(--bg); font: 600 13px/1.4 system-ui, sans-serif; }
+    .open-button:hover { border-color: var(--accent); }
+    .open-button i { font-style: normal; margin-left: 8px; padding: 0 6px; background: var(--muted); color: var(--bg); }
+    .open-button.due { border-color: var(--fill); animation: pulse 2s ease-in-out infinite; }
+    .open-button.due i { background: var(--fill); color: var(--on-fill); }
+    /* a square ring that grows and fades */
+    @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--fill) 55%, transparent); } 50% { box-shadow: 0 0 0 5px transparent; } }
+    @media (prefers-reduced-motion: reduce) { .open-button.due, .agent .fix { animation: none; } }
+    .panel { right: 0; top: 0; bottom: 0; width: ${PANEL_PX}px; max-width: 100vw; display: flex; flex-direction: column;
+      background: var(--bg); color: var(--fg); border-left: 1px solid var(--line); font: 14px/1.45 system-ui, sans-serif; }
     .panel > :not(ol) { flex: none; }
-    .where { padding: 10px 14px 0; font-size: 12px; color: #9aa4b8; }
-    .where b { color: #ffd166; }
-    .where { display: flex; gap: 6px; }
-    .where span { margin-right: auto; min-width: 0; }
-    .where a { white-space: nowrap; text-decoration: none; }
-    .spent { padding: 2px 14px 0; font-size: 12px; color: #6f7a90; }
-    .agent { display: flex; align-items: center; gap: 8px; padding: 6px 14px 0; font-size: 12px; color: #9aa4b8; }
+    .where { display: flex; align-items: baseline; gap: 6px; padding: 12px 16px 0; font-size: 12px; color: var(--muted); }
+    .where b { color: var(--fg); font-weight: 600; }
+    .where span { margin-right: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .where a { white-space: nowrap; }
+    .spent { padding: 2px 16px 0; font-size: 12px; color: var(--faint); }
+    .agent { display: flex; align-items: center; gap: 8px; padding: 8px 16px 0; font-size: 12px; color: var(--muted); }
     .agent span { margin-right: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .agent span::before { content: '● '; color: var(--state); }
-    .agent button, .attached button { border: 1px solid #333c4f; border-radius: 7px; padding: 2px 9px; background: none; color: #e8ecf3; }
-    textarea { margin: 8px 14px 0; height: 130px; min-height: 80px; resize: vertical; background: #0b0e14; color: #e8ecf3; border: 1px solid #333c4f;
-      border-radius: 9px; padding: 8px 10px; font: 14px/1.4 system-ui, sans-serif; }
-    textarea:focus { outline: 1px solid #ffd166; }
-    .attached, .quote { margin: 6px 14px 0; font: 12px ui-monospace, monospace; color: #9aa4b8; }
-    .attached .text, .quote .text { color: #e8ecf3; }
-    .quote .text { font: italic 13px system-ui, sans-serif; }
-    .attached .remove, .quote .remove { border: 0; padding: 0 4px; color: #9aa4b8; }
-    .attached .picker { display: flex; gap: 6px; margin-top: 4px; }
-    .send { display: flex; align-items: center; gap: 8px; padding: 8px 14px 10px; border-bottom: 1px solid #262d3b; }
-    .send span { font-size: 12px; color: #6f7a90; margin-right: auto; }
-    .send span.error { color: #ffb3a8; }
-    .send button { border: 0; border-radius: 8px; padding: 6px 12px; background: #ffd166; color: #1c1606; font: 700 14px system-ui, sans-serif; white-space: nowrap; }
-    .send button + button { background: #9fb6ff; color: #0b1430; }
-    ol { flex: 1 1 auto; min-height: 0; list-style: none; margin: 0; padding: 6px 14px 12px; overflow: auto; display: grid; align-content: start; gap: 8px; }
-    li { padding: 7px 10px; border-radius: 9px; background: #1b2130; }
+    .agent span::before, li .status::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 6px; vertical-align: 1px; background: currentColor; }
+    .agent span::before { background: var(--state); }
+    .agent .fix, .send button:first-of-type { border-color: var(--fill); background: var(--fill); color: var(--on-fill); font-weight: 600; }
+    .agent .fix { white-space: nowrap; animation: pulse 2s ease-in-out infinite; }
+    .send button + button { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+    .remove, .more, .close { border: 0; padding: 0 4px; color: var(--muted); }
+    .remove:hover, .more:hover, .close:hover { color: var(--fg); }
+    .replying { margin: 10px 16px 0; font-size: 12px; color: var(--accent); }
+    .replying b { font-weight: 600; }
+    .replying + textarea { margin-top: 4px; }
+    textarea { display: block; width: calc(100% - 32px); margin: 10px 16px 0; height: 130px; min-height: 80px; resize: vertical; padding: 8px 10px;
+      border: 1px solid var(--line); border-radius: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, sans-serif; }
+    textarea::placeholder { color: var(--faint); }
+    textarea:focus { outline: none; border-color: var(--accent); }
+    .attached, .quote { margin: 6px 16px 0; font: 12px/1.45 ui-monospace, monospace; color: var(--muted); }
+    .attached .text, .quote .text { color: var(--fg); }
+    .quote .text { font: italic 13px/1.45 system-ui, sans-serif; }
+    /* a quote from the attached element: under it, as a part of it */
+    .attached:not([hidden]) + .quote { margin-left: 32px; }
+    .attached .picker { display: flex; gap: 6px; margin-top: 6px; }
+    .send { display: flex; align-items: center; gap: 8px; padding: 10px 16px 12px; border-bottom: 1px solid var(--line); }
+    .send span { margin-right: auto; font-size: 12px; color: var(--faint); }
+    .send span.error { color: var(--bad); }
+    .send button { padding: 5px 12px; font-size: 13px; white-space: nowrap; }
+    .panel > ol { flex: 1 1 auto; min-height: 0; overflow: auto; }
+    ol { list-style: none; margin: 0; padding: 0; }
+    li { padding: 10px 16px; border-bottom: 1px solid var(--line); }
+    li.shown { background: var(--tint); }
     li .text { white-space: pre-wrap; overflow-wrap: anywhere; }
-    li .model { font-weight: 700; color: #9aa4b8; margin-right: 6px; }
-    li .status { font: 700 10.5px ui-monospace, monospace; padding: 1px 6px; border-radius: 99px; margin-right: 6px; background: #333c4f; color: #c9d1e0; }
-    li .status.fixed { background: #1f5a48; color: #8ff0c9; }
-    li .status.wip { background: #5a4a1f; color: #ffd166; }
-    li .status.no, li .status.stuck { background: #4a2a2a; color: #ffb3a8; }
-    li .meta { font-size: 11.5px; color: #6f7a90; }
-    li .meta a { font-size: 12px; }
-    li .meta a.delete { color: #ffb3a8; }
-    li .quoted { margin: 2px 0 0; font: italic 12.5px system-ui, sans-serif; color: #9aa4b8; overflow-wrap: anywhere; }
-    li .reply { margin-top: 4px; color: #8ff0c9; font-size: 13px; white-space: pre-wrap; }
+    li .model { margin-right: 6px; font-weight: 600; color: var(--muted); }
+    li .status { margin-right: 8px; font-size: 12px; font-weight: 600; color: var(--faint); white-space: nowrap; }
+    li .status.wip { color: var(--accent); }
+    li .status.fixed { color: var(--ok); }
+    li .status.no, li .status.stuck { color: var(--bad); }
+    li .re { margin-right: 6px; font-size: 12px; }
+    li .quoted { margin-top: 4px; font: italic 13px/1.45 system-ui, sans-serif; color: var(--muted); overflow-wrap: anywhere; }
     li .edit { margin-top: 4px; font-size: 12px; }
-    li .edit summary { cursor: pointer; color: #ffd166; }
-    li .edit pre { margin: 4px 0 0; padding: 4px 6px; border-radius: 6px; font: 12px/1.4 ui-monospace, monospace; white-space: pre-wrap;
+    li .edit summary { cursor: pointer; color: var(--accent); }
+    li .edit pre { margin: 4px 0 0; padding: 6px 8px; color: var(--fg); font: 12px/1.45 ui-monospace, monospace; white-space: pre-wrap;
       overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
-    li .edit .before { background: #3a2226; color: #ffb3a8; }
-    li .edit .after { background: #1d3a30; color: #8ff0c9; }
-    .updated { position: fixed; left: 50%; top: 12px; transform: translateX(-50%); z-index: 2147483001; padding: 8px 14px; border-radius: 10px;
-      background: #ffd166; color: #1c1606; font: 600 14px system-ui, sans-serif; box-shadow: 0 10px 30px -10px #000; }
-    .updated button { margin-left: 10px; border: 0; border-radius: 7px; padding: 4px 10px; background: #1c1606; color: #ffd166; font-size: 13px; }
+    li .edit .before { background: var(--bad-bg); }
+    li .edit .after { background: var(--ok-bg); }
+    li .meta { margin-top: 4px; font-size: 12px; color: var(--faint); }
+    li .meta a.delete { color: var(--faint); }
+    li .meta a.delete:hover { color: var(--bad); }
+    li .reply { margin-top: 6px; padding-left: 10px; border-left: 1px solid var(--line); font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    li .act { display: flex; gap: 16px; margin-top: 6px; font-size: 12px; }
+    li.archive { padding: 0; border: 0; }
+    li.archive summary { padding: 10px 16px; cursor: pointer; font-size: 12px; color: var(--muted); }
+    li.archive li { opacity: .75; }
+    .updated { position: fixed; left: 50%; top: 16px; transform: translateX(-50%); z-index: 2147483001; display: flex; align-items: center; gap: 12px;
+      padding: 6px 6px 6px 14px; background: var(--fill); color: var(--on-fill); font: 600 13px/1.4 system-ui, sans-serif; }
+    .updated button { border-color: currentColor; color: inherit; font-weight: 600; }
   </style>
-  <button class="open-button" title="Review notes">✎ Note<i hidden></i></button>
-  <div class="panel${DOCK ? ' dock' : ''}" hidden>
-    <div class="where"><b>Review</b> · <span></span><a href="${esc(CONTENTS)}" title="The table of contents of this folder">☰ Contents</a></div>
-    <div class="spent" hidden></div>
-    <div class="agent"><span></span><button></button></div>
-    <textarea placeholder="What is wrong here? Select text on the page to quote it, Alt+click to attach an element."></textarea>
-    <div class="quote" hidden></div>
+  <button class="open-button" title="${OPEN_HINT}">✎ Note<i hidden title="The notes of this page that are not closed"></i></button>
+  <div class="panel" hidden>
+    <div class="where"><b>Review</b> · <span title="Your place on the page: a new note keeps it"></span><a href="${esc(CONTENTS)}" title="The table of contents of this folder">☰ Contents</a><button class="close" title="Close the panel (Esc). The draft stays.">✕</button></div>
+    <div class="spent" hidden title="What the agents spent on the notes of this page, the archive too: the cost in USD, the count of agent sessions and the time of agent work"></div>
+    <div class="agent"><span></span><button class="fix" hidden></button><button class="toggle"></button></div>
+    <div class="replying" hidden></div>
+    <textarea placeholder="${esc(PLACEHOLDER)}"></textarea>
     <div class="attached" hidden></div>
-    <div class="send"><span></span>${Object.entries(MODELS).map(([m, letter]) =>
-      `<button data-model="${esc(m)}" title="Send: a ${esc(m)} agent fixes the note">${esc(letter)} Send</button>`).join('')}</div>
+    <div class="quote" hidden></div>
+    <div class="send"><span></span>${Object.entries(MODELS).map(([m, letter], i) =>
+      `<button data-model="${esc(m)}" title="Send to ${esc(agentOf(m))}${SEND_KEYS[i] ? ` (${SEND_KEYS[i]})` : ''}">${esc(letter)} Send</button>`).join('')}</div>
     <ol></ol>
   </div>
   <div class="updated" hidden>The page was updated<button>Reload here</button></div>`;
   const $ = s => root.querySelector(s);
   const openButton = $('.open-button'), panel = $('.panel'), draft = $('textarea'), attached = $('.attached'), quote = $('.quote'), list = $('ol'), hint = $('.send span');
+  const replying = $('.replying'), fixButton = $('.agent .fix'), closeButton = $('.where .close');
   const HINT = `Ctrl+Enter: ${MODELS[FIRST]}${SECOND ? ` · +Shift: ${MODELS[SECOND]}` : ''}${DOCK ? '' : ' · Esc: close'}`;
   hint.textContent = HINT;
-  document.head.insertAdjacentHTML('beforeend', '<style>[data-review-picked] { outline: 2px solid #ffd166 !important; outline-offset: 2px !important; }' +
-    (DOCK ? `html { margin-right: ${DOCK_PX}px; }` : '') + '</style>');
+  hint.title = Object.keys(MODELS).map((m, i) => SEND_KEYS[i] && `${SEND_KEYS[i]}: send to ${agentOf(m)}`).filter(Boolean)
+    .concat(DOCK ? [] : ['Esc: close the panel, the draft stays']).join('\n');
+  document.head.insertAdjacentHTML('beforeend', '<style>[data-review-picked] { outline: 2px solid #2f81f7 !important; outline-offset: 2px !important; }' +
+    (DOCK ? `html { margin-right: ${PANEL_PX}px; }` : '') + '</style>');
   document.body.append(host);
-  openButton.hidden = DOCK;
+  openButton.hidden = closeButton.hidden = DOCK;
 
   // the keys, clicks and wheel turns in the panel do not go to the page: a deck must not turn a slide when one types a note
   for (const type of ['keydown', 'keyup', 'keypress', 'input', 'click', 'dblclick', 'mousedown', 'mouseup', 'pointerdown', 'pointerup', 'wheel', 'contextmenu'])
@@ -190,6 +350,19 @@
   try { draft.value = sessionStorage.getItem(DRAFT) || ''; } catch { }
   const keepDraft = () => { try { sessionStorage.setItem(DRAFT, draft.value); } catch { } };
   draft.addEventListener('input', keepDraft);
+
+  // Reply mode: the draft becomes a reply to a closed note (the field `re`). It stays when the page reloads, as the draft does.
+  const REPLY = 'review-reply:' + PAGE;
+  let replyTo = null;
+  function replyMode(id) {
+    replyTo = id || null;
+    try { replyTo ? sessionStorage.setItem(REPLY, replyTo) : sessionStorage.removeItem(REPLY); } catch { }
+    replying.hidden = !replyTo;
+    replying.innerHTML = replyTo ? `↪ Reply to <b>${esc(replyTo)}</b> <button class="remove" title="Leave the reply mode: the draft becomes a new note">✕</button>` : '';
+    draft.placeholder = replyTo ? `What is still wrong after ${replyTo}? An agent reads ${replyTo}, its reply and your reply, and corrects the fix.` : PLACEHOLDER;
+  }
+  try { replyMode(sessionStorage.getItem(REPLY)); } catch { }
+  replying.onclick = e => { if (e.target.closest('button')) { replyMode(null); draft.focus(); } };
 
   // a docked panel does not close: "close" only takes the focus from the draft
   let isOpen = DOCK;
@@ -204,6 +377,7 @@
     refresh();
   }
   openButton.onclick = () => show(!isOpen);
+  closeButton.onclick = () => show(false);
   panel.hidden = !DOCK;
   if (DOCK) addEventListener('scroll', showPlace, { passive: true });
 
@@ -234,17 +408,22 @@
     const target = e.composedPath()[0];
     const t = partOf(target instanceof Element ? target : target.parentElement);
     unpick();
+    // one thing to point at: a quote stays only when it is a part of the new element
+    if (selected && !t.contains(selectedNode)) unselect();
     picked = describe(t, e);
     pickedNode = t;
     t.setAttribute('data-review-picked', '');
+    // the picker buttons send a task at once, so they stay behind ⋯
     attached.innerHTML = `📎 <span class="text">${esc(picked.text || picked.path)}</span> <button class="remove" title="Remove">✕</button>` +
-      `<div class="picker"><button data-issue="too-big">Can't pick a smaller part</button><button data-issue="wrong">Picks the wrong part</button></div>`;
+      `<button class="more" title="Alt+click picks the wrong part?">⋯</button>` +
+      `<div class="picker" hidden><button data-issue="too-big">Can't pick a smaller part</button><button data-issue="wrong">Picks the wrong part</button></div>`;
     attached.hidden = false;
     show(true);
   }, true);
   attached.onclick = e => {
     const b = e.target.closest('button');
     if (b?.classList.contains('remove')) unpick();
+    else if (b?.classList.contains('more')) { const p = attached.querySelector('.picker'); p.hidden = !p.hidden; }
     else if (b?.dataset.issue) send(FIRST, b.dataset.issue);
   };
 
@@ -252,10 +431,11 @@
 
   // A click in the panel clears the selection on the page, so the panel keeps the last text that the reader selected.
   // A new selection replaces it; a plain click on the page that selects nothing, ✕ and "Send" remove it.
+  // With an attached element, the quote is a part of it: a selection out of the element removes the element.
   const QUOTE_MAX = 2000;
-  let selected = null;
+  let selected = null, selectedNode = null;
   function unselect() {
-    selected = null;
+    selected = selectedNode = null;
     quote.hidden = true;
   }
   document.addEventListener('selectionchange', () => {
@@ -266,7 +446,9 @@
     const common = s.getRangeAt(0).commonAncestorContainer;
     const t = common instanceof Element ? common : common.parentElement;
     if (!t || t === host) return;
+    if (pickedNode && !pickedNode.contains(t)) unpick();
     selected = { text: text.slice(0, QUOTE_MAX), path: pathOf(t) };
+    selectedNode = t;
     const shown = selected.text.length > 200 ? selected.text.slice(0, 200) + '…' : selected.text;
     quote.innerHTML = `❝ <span class="text">${esc(shown)}</span> <button class="remove" title="Do not quote it">✕</button>`;
     quote.hidden = false;
@@ -275,20 +457,28 @@
 
   // ---- Send a note ----
 
+  // an error under the draft; '' shows the keys again
+  function warn(text) {
+    hint.textContent = text || HINT;
+    hint.className = text ? 'error' : '';
+  }
+
   // issue: a picker button; its task goes before the draft
   async function send(model, issue) {
     const text = [issue && PICKER[issue], draft.value.trim()].filter(Boolean).join('\n');
     if (!text) return;
     const p = place();
     const el = picked && (issue ? { ...picked, issue } : picked);
+    // a note about the picker is a new task, not a reply
+    const re = issue ? null : replyTo;
     try {
-      await post('notes', { page: PAGE, text, model, el, sel: selected, ctx: { where: where(p), hash: p.hash, w: innerWidth, h: innerHeight } });
+      await post('notes', { page: PAGE, text, model, el, sel: selected, re, ctx: { where: where(p), hash: p.hash, w: innerWidth, h: innerHeight } });
     } catch (e) {
-      hint.textContent = 'Not sent: ' + e.message;
-      hint.className = 'error';
+      warn('Not sent: ' + e.message);
       return;
     }
-    hint.textContent = HINT; hint.className = '';
+    warn('');
+    if (re) replyMode(null);
     draft.value = ''; keepDraft();
     unpick();
     unselect();
@@ -315,35 +505,90 @@
     box.textContent = `This page: ${usd(cost)} · ${sessions} agent session${sessions === 1 ? '' : 's'} · ${duration(ms)} of agent work`;
   }
 
-  const STATE_COLOR = { working: '#8ff0c9', stopping: '#ffd166', idle: '#6f7a90', stopped: '#ffb3a8', error: '#ffb3a8' };
+  const STATE_COLOR = { working: 'var(--accent)', stopping: 'var(--muted)', idle: 'var(--faint)', stopped: 'var(--bad)', error: 'var(--bad)' };
+  const tokens = a => `The tokens: the context of the session. At ${Math.round(a.limit / 1000)}k tokens the next task starts a new session.`;
+  const STATE_HINT = {
+    working: a => `An agent works on these notes now. Ω: Opus, Σ: Sonnet; a1, a2, …: the agent sessions. ${tokens(a)}`,
+    stopping: () => 'The agent stops. Its notes go back to the queue.',
+    idle: a => `No agent works now. For each model: the session that its next task resumes (a1, a2, …) and the context of that session. ${tokens(a)}`,
+    stopped: () => 'Stop turned the agent off: it does not start by itself. Fix or Start starts it.',
+    error: () => 'The last task failed or closed no note, so the agent does not take the next task by itself. Fix or Start tries again.',
+  };
+  const TOGGLE_HINT = {
+    stop: 'Stop the agent and its start by itself. The notes in work go back to the queue.',
+    start: 'Start the agent: it takes the open notes, the oldest first. After new notes, it starts by itself again.',
+  };
+  // m:ss
+  const clock = ms => { const s = Math.ceil(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+
+  // agent: the last agent status; autoAt: the time of the start by itself, or null; here: the open notes of this page
+  let agent = null, autoAt = null, here = 0;
+  // open notes wait, and no agent runs: the Fix button starts the agent now
+  const waiting = a => a.open > 0 && a.state !== 'working' && a.state !== 'stopping';
   function showAgent(a) {
-    const box = $('.agent'), text = box.querySelector('span'), button = box.querySelector('button');
+    agent = a;
+    autoAt = a.autoIn == null ? null : Date.now() + a.autoIn;
+    const box = $('.agent'), text = box.querySelector('span'), toggle = box.querySelector('.toggle');
     box.style.setProperty('--state', STATE_COLOR[a.state]);
     // one line, so that a long text does not move the list; the full text is in the tooltip
     text.textContent = 'Agent: ' + a.text;
-    text.title = a.text;
-    button.textContent = a.action === 'stop' ? 'Stop' : 'Start';
-    button.onclick = () => post('agent/' + a.action).then(showAgent).catch(() => {});
+    text.title = `${a.text}\n\n${STATE_HINT[a.state](a)}`;
+    toggle.textContent = a.action === 'stop' ? 'Stop' : 'Start';
+    toggle.title = TOGGLE_HINT[a.action];
+    toggle.onclick = () => post('agent/' + a.action).then(showAgent).catch(() => {});
+    // Fix does what Start does
+    toggle.hidden = waiting(a) && a.action === 'start';
+    showFix();
   }
+  fixButton.onclick = () => post('agent/start').then(showAgent).catch(() => {});
+  // the Fix button and the mark on the ✎ button, with the time to the start by itself
+  function showFix() {
+    const on = !!agent && waiting(agent);
+    fixButton.hidden = !on;
+    openButton.classList.toggle('due', on);
+    if (!on) return void (openButton.title = OPEN_HINT);
+    const left = autoAt && Math.max(0, autoAt - Date.now());
+    fixButton.textContent = `Fix ${agent.open}${autoAt ? (left ? ` · auto in ${clock(left)}` : ' · starts now') : ''}`;
+    const notes = `${agent.open} open note${agent.open === 1 ? '' : 's'}`;
+    fixButton.title = `Start the agent now. It fixes the ${notes} of the project (${here} on this page), the oldest first. ` +
+      (autoAt ? 'Else it starts by itself at the end of the count; each new note starts the count again.'
+        : agent.state === 'stopped' ? 'Stop turned off the start by itself.' : 'It does not start by itself on these notes.');
+    openButton.title = `${OPEN_HINT}. ${notes} wait for the agent: open the panel and press Fix` +
+      (autoAt ? `, or the agent starts by itself in ${clock(left)}.` : '.');
+  }
+  setInterval(() => { if (autoAt) showFix(); }, 1000);
 
   // an edit in the Markdown view: the text before and after; the text of the note is optional
-  const edit = e => `<details class="edit"><summary>✎ Edit at line ${esc(e.line)}</summary>` +
+  const edit = e => `<details class="edit"><summary${e.conflict ? ' title="The block changed while you edited it, so the file has the other version. The agent merges your edit into it."' : ''}>` +
+    `✎ Edit at line ${esc(e.line)}${e.conflict ? ' · the block changed: the agent merges it' : ''}</summary>` +
     `<pre class="before">${esc(e.before)}</pre><pre class="after">${esc(e.after) || '(removed)'}</pre></details>`;
+  // the links under a closed note: in the list, "Reply" and "Looks good"; in the archive, back to the list
+  const actions = n => !CLOSED.has(n.status) ? '' : n.accepted
+    ? `<div class="act"><a data-unaccept="${esc(n.id)}" title="Move the note back from the archive to the list">Back to the list</a></div>`
+    : `<div class="act"><a data-reply="${esc(n.id)}" title="Write a follow-up to this note: an agent corrects or redoes the fix">Reply</a>` +
+      `<a data-accept="${esc(n.id)}" title="The result is good: move the note to the archive at the bottom of the list">Looks good</a></div>`;
   function item(n) {
-    const status = `<span class="status ${esc(n.status)}">${esc(STATUS[n.status] || n.status)}${n.agent && n.status !== 'open' ? ' · ' + esc(n.agent) : ''}</span>`;
-    const model = MODELS[n.model] ? `<span class="model" title="${esc(n.model)}">${esc(MODELS[n.model])}</span>` : '';
+    const by = n.agent && n.status !== 'open'
+      ? ` · <span title="Agent session ${esc(n.agent)} ${n.status === 'wip' ? 'works' : 'worked'} on this note">${esc(n.agent)}</span>` : '';
+    const status = `<span class="status ${esc(n.status)}" title="${esc(STATUS_HINT[n.status] || '')}">${esc(STATUS[n.status] || n.status)}${by}</span>`;
+    const model = MODELS[n.model] ? `<span class="model" title="Sent to ${esc(agentOf(n.model))}">${esc(MODELS[n.model])}</span>` : '';
+    const re = n.re ? `<a class="re" data-show="${esc(n.re)}" title="A reply to note ${esc(n.re)}">↪ ${esc(n.re)}</a>` : '';
     const meta = [esc(n.id), esc(n.ctx?.where), n.ctx?.hash && `<a data-go="${esc(bare(n.ctx.hash))}">open here</a>`, esc(spent(n)),
       n.status !== 'wip' && `<a class="delete" data-delete="${esc(n.id)}">delete</a>`].filter(Boolean).join(' · ');
     const quoted = n.sel?.text ? `<div class="quoted">❝ ${esc(n.sel.text.length > 200 ? n.sel.text.slice(0, 200) + '…' : n.sel.text)}</div>` : '';
-    return `<li data-id="${esc(n.id)}"><div class="text">${model}${status}${esc(n.text)}</div>${quoted}${n.edit ? edit(n.edit) : ''}<div class="meta">${meta}</div>` +
-      (n.reply ? `<div class="reply">${esc(n.reply)}</div>` : '') + '</li>';
+    return `<li data-id="${esc(n.id)}"><div class="text">${model}${status}${re}${esc(n.text)}</div>${quoted}${n.edit ? edit(n.edit) : ''}<div class="meta">${meta}</div>` +
+      (n.reply ? `<div class="reply">${esc(n.reply)}</div>` : '') + actions(n) + '</li>';
   }
 
   // The list is drawn again only when it changed, so that a scroll, a selection or a hover stays.
   // After a change, the note at the top of the view stays in its place.
-  let drawn = '';
+  // The accepted notes go to the archive at the bottom, the newest first too.
+  let drawn = '', archiveOpen = false;
   function showNotes(notes) {
-    const html = notes.slice().reverse().map(item).join('');
+    const archived = notes.filter(n => n.accepted).reverse();
+    const html = notes.filter(n => !n.accepted).reverse().map(item).join('') + (archived.length
+      ? `<li class="archive"><details${archiveOpen ? ' open' : ''}><summary title="The notes that you accepted with &quot;Looks good&quot;">` +
+        `Archive (${archived.length})</summary><ol>${archived.map(item).join('')}</ol></details></li>` : '');
     if (html === drawn) return;
     drawn = html;
     const top = list.getBoundingClientRect().top;
@@ -355,12 +600,33 @@
   }
   list.onclick = async e => {
     const a = e.target.closest('a');
-    if (a?.dataset.go) goTo(a.dataset.go);
-    if (!a?.dataset.delete || !confirm(`Delete note ${a.dataset.delete}?`)) return;
+    if (a?.dataset.go) goTo(a.dataset.go, lastNotes.find(n => n.id === a.closest('li')?.dataset.id));
+    if (!a?.dataset.delete) return;
     try { await api('notes?id=' + encodeURIComponent(a.dataset.delete), { method: 'DELETE' }); }
-    catch (err) { alert(`Not deleted: ${err.message}.`); }
+    catch (err) { warn(`Not deleted: ${err.message}`); }
     refresh();
   };
+  list.addEventListener('toggle', e => { if (e.target.matches('.archive > details')) archiveOpen = e.target.open; }, true);
+  // the links of the replies and of the closed notes
+  list.addEventListener('click', async e => {
+    const d = e.target.closest('a')?.dataset || {};
+    if (d.show) showNote(d.show);
+    if (d.reply) { replyMode(d.reply); draft.focus(); }
+    if (!d.accept && !d.unaccept) return;
+    try { await api('accept?id=' + encodeURIComponent(d.accept || d.unaccept), { method: d.accept ? 'POST' : 'DELETE' }); }
+    catch (err) { warn('Not changed: ' + err.message); }
+    refresh();
+  });
+  // show a note of the list, also in the archive
+  function showNote(id) {
+    const li = [...list.querySelectorAll('li[data-id]')].find(x => x.dataset.id === id);
+    if (!li) return;
+    const archive = li.closest('.archive > details');
+    if (archive) archive.open = archiveOpen = true;
+    li.scrollIntoView({ block: 'nearest' });
+    li.classList.add('shown');
+    setTimeout(() => li.classList.remove('shown'), 1500);
+  }
 
   // the page file changed: offer a reload at the same place, unless the page shows the new file itself
   let seen = 0;
@@ -377,17 +643,21 @@
   };
 
   // one request gives the notes of the page, the time of its file and the agent status; an error keeps the old view
+  let lastNotes = [];  // for "open here"
   async function refresh() {
     let r;
     try { r = await api('page?path=' + encodeURIComponent(PAGE)); } catch { return; }
+    lastNotes = r.notes;
     const left = r.notes.filter(n => !CLOSED.has(n.status)).length;
     const badge = openButton.querySelector('i');
     badge.hidden = !left;
     badge.textContent = left;
     watch(r.mtime);
+    here = r.notes.filter(n => n.status === 'open').length;
+    // also with the panel closed: the ✎ button shows that notes wait for Fix
+    showAgent(r.agent);
     if (!isOpen) return;
     if (DOCK) showPlace();  // the Markdown view renders the headings after the panel starts
-    showAgent(r.agent);
     showSpent(r.notes);
     showNotes(r.notes);
   }

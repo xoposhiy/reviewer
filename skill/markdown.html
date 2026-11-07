@@ -8,8 +8,10 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css@5.8.1/github-markdown.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css">
 <style>
-  :root { --bg: #fff; --fg: #1f2328; --link: #0969da; --line: #d0d7de; --muted: #59636e; --mark: #9a6700; --error: #cf222e; color-scheme: light dark; }
-  @media (prefers-color-scheme: dark) { :root { --bg: #0d1117; --fg: #f0f6fc; --link: #4493f8; --line: #3d444d; --muted: #9198a1; --mark: #d29922; --error: #f85149; } }
+  :root { --bg: #fff; --fg: #1f2328; --link: #0969da; --line: #d1d9e0; --muted: #59636e; --accent: #0969da; --fill: #0969da; --on-fill: #fff;
+    --flash: rgb(255 209 102 / 35%); --error: #cf222e; color-scheme: light dark; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0d1117; --fg: #f0f6fc; --link: #4493f8; --line: #30363d; --muted: #9198a1; --accent: #4493f8;
+    --fill: #1f6feb; --on-fill: #fff; --flash: rgb(210 153 34 / 30%); --error: #f85149; } }
   body { margin: 0; background: var(--bg); }
   .markdown-body { box-sizing: border-box; max-width: 900px; margin: 0 auto; padding: 32px 48px 50vh 84px; }
   .file { font: 12px ui-monospace, monospace; color: var(--muted); margin-bottom: 16px; overflow-wrap: anywhere; }
@@ -25,7 +27,7 @@
      and ≡ the whole list. A list item has the list indent too, so its ✎ is next to the ≡ of its list. */
   .block { position: relative; }
   .block > .edit { position: absolute; left: -36px; top: 0; width: 26px; height: 26px; padding: 0; opacity: 0; cursor: pointer;
-    border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--muted); font: 14px/24px system-ui, sans-serif; }
+    border: 1px solid var(--line); border-radius: 0; background: var(--bg); color: var(--muted); font: 14px/24px system-ui, sans-serif; }
   li.block > .edit { left: calc(-2em - 36px); }
   .block > .edit::before { content: '✎'; }
   .block > .edit.wide { left: -66px; }
@@ -33,19 +35,34 @@
   .block > .edit.list::before { content: '≡'; }
   li.editor { list-style: none; }
   .block:hover > .edit, .block > .edit:focus-visible { opacity: 1; }
-  .block > .edit:hover { color: var(--mark); border-color: var(--mark); }
+  .block > .edit:hover { color: var(--accent); border-color: var(--accent); }
+  /* a block with a draft: its button stays visible */
+  .block > .edit.draft { opacity: 1; color: var(--accent); border-color: var(--accent); }
+  .block > .edit.draft::after { content: ''; position: absolute; top: -3px; right: -3px; width: 6px; height: 6px; background: var(--accent); }
 
-  .editor { margin: 0 0 16px; padding: 8px; border: 1px solid var(--mark); border-radius: 8px; }
-  .editor textarea, .editor input { box-sizing: border-box; width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px;
+  /* "open here" in the panel: the block of the note, for a moment. The outline makes the color reach past the text. */
+  .block.flash { animation: flash 3s ease-in; }
+  @keyframes flash {
+    0%, 75% { background: var(--flash); outline: 6px solid var(--flash); }
+    100% { background: transparent; outline: 6px solid transparent; }
+  }
+
+  .editor { margin: 0 0 16px; padding: 8px; border: 1px solid var(--accent); }
+  .editor textarea, .editor input { box-sizing: border-box; width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 0;
     background: var(--bg); color: inherit; }
+  .editor textarea:focus, .editor input:focus { outline: none; border-color: var(--accent); }
   .editor textarea { min-height: 60px; resize: vertical; font: 13px/1.5 ui-monospace, monospace; }
   .editor input { margin-top: 6px; font: 13px system-ui, sans-serif; }
   .editor .row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
   .editor .row span { margin-right: auto; font-size: 12px; color: var(--muted); }
   .editor .row span.error { color: var(--error); }
-  .editor button { padding: 4px 12px; border: 1px solid var(--line); border-radius: 6px; background: none; color: inherit; font: 600 13px system-ui, sans-serif; cursor: pointer; }
-  .editor button[data-model] { border: 0; background: #ffd166; color: #1c1606; }
-  .editor button[data-model] + button[data-model] { background: #9fb6ff; color: #0b1430; }
+  .editor button { padding: 4px 12px; border: 1px solid var(--line); border-radius: 0; background: none; color: inherit; font: 13px system-ui, sans-serif; cursor: pointer; }
+  .editor button:hover { border-color: var(--muted); }
+  /* Reset shows only for a changed text; Cancel then keeps a draft, so it stands out */
+  .editor:not(.changed) .reset { display: none; }
+  .editor.changed .cancel { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .editor button[data-model] { border-color: var(--fill); background: var(--fill); color: var(--on-fill); font-weight: 600; }
+  .editor button[data-model] + button[data-model] { border-color: var(--accent); background: none; color: var(--accent); }
 </style>
 </head>
 <body>

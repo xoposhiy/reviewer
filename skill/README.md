@@ -38,8 +38,9 @@ It lists the pages (HTML and Markdown files) of the folder and of its subfolders
 - The pages that git ignores are hidden; the "git-ignored" box shows them. A page with open notes is in "Open notes" anyway.
 - The page that you came from (for example by "☰ Contents" in the panel) has the mark "you were here".
 
-The agent status and its Stop or Start button are at the top. At the bottom: the output of the agent,
-and every review server of this computer, with Stop and Restart.
+At the top: one short line about the agent of the project, for example "Agent works · 2 notes wait" or "3 notes wait · auto in 1:40";
+hover over it for the full status. While the agent works, Stop is next to it. Fix in the panel starts the agent.
+At the bottom: every review server of this computer, with Stop and Restart.
 Not in the lists: dot folders (for example `.git`), `node_modules` and the folder of this tool.
 An `index.html` opens by its name only (`/sub/index.html`): `/sub/` is the table of contents.
 
@@ -51,22 +52,38 @@ Options:
 | `--port <n>` | `8765` | The port. `0` takes any free port. |
 | `--data <dir>` | `<root>/.review` | The folder for the notes. The server puts a `.gitignore` with `*` in it, so git ignores the folder. |
 | `--agent <command>` | `claude` | The agent command. Tests give a fake agent here. |
+| `--delay <seconds>` | `120` | The agent starts by itself this long after the last new note. Tests give `0` or a few seconds here. |
 
 The server listens only on 127.0.0.1, and it refuses changes from pages of other sites.
 
 ## The panel
 
-The server adds the panel to each HTML page that it serves.
+The server adds the panel to each HTML page that it serves. The panel follows the light or dark color scheme of the system.
 
-- The ✎ button: open the panel. `Esc`: close it. "☰ Contents" in the panel: the table of contents of the folder of the page. A click on the page outside the panel closes it too; the draft stays.
+- The "✎ Note" button at the bottom right: open the panel. The panel opens at the right side of the window, full height, over the page:
+  the page keeps its layout. `Esc` or ✕: close it. A click on the page outside the panel closes it too; the draft stays.
+  "☰ Contents" in the panel: the table of contents of the folder of the page.
 - Select text on the page: the note quotes it. The panel shows the quote under the draft and keeps it when you click in the panel.
   A new selection replaces the quote. A click on the page that selects nothing, or ✕, removes it.
 - `Alt+click` on the page: attach the element under the cursor to the note.
+- A note points at one thing: a quote or an element. Both stay only when the quote is a part of the element:
+  Alt+click a big element, then select the words in it. Alt+click on an element that does not hold the quote removes the quote,
+  and a selection out of the attached element removes the element.
 - Send the note and close the panel: "Ω Send" or `Ctrl+Enter` gives the note to an Opus agent; "Σ Send" or `Ctrl+Shift+Enter` to a Sonnet agent.
-- Under an attached element, "Can't pick a smaller part" and "Picks the wrong part" send a note at once, to Opus:
-  a task to fix the page markup, so that Alt+click picks the right part. The draft text goes after the task.
-- Each note keeps its place on the page. "open here" opens that place again.
-- "delete" removes a note. A note in work has no "delete": stop the agent first.
+- Next to ✕ of an attached element, "⋯" shows two buttons: "Can't pick a smaller part" and "Picks the wrong part".
+  Each sends a note at once, to Opus: a task to fix the page markup, so that Alt+click picks the right part. The draft text goes after the task.
+- While open notes wait and no agent runs, the agent line has the button "Fix 3 · auto in 1:40": the count of the open notes
+  of the project and the time to the start by itself. "Fix" starts the agent at once. The ✎ button of the closed panel pulses then.
+- Each note keeps its place on the page. "open here" opens that place again and highlights for a moment what the note is about:
+  the quoted text (in browsers with the CSS Custom Highlight API), else the attached element. If the page has neither of them now,
+  it stays at the place.
+- Under a closed note (fixed or not fixed):
+  - "Reply" puts the draft into reply mode: "↪ Reply to n5 ✕" is above the draft, and ✕ leaves the mode.
+    The next note is a reply to n5 (the field `re`). The list shows "↪ n5" on the reply; a click shows n5.
+  - "Looks good" accepts the result. The note goes to "Archive (N)" at the bottom of the list; "Back to the list" takes it back.
+    The cost line of the page counts the archive too.
+- "delete" removes a note at once, with no question. A note in work has no "delete": stop the agent first.
+- Hover over a short label (Ω, Σ, a2, a status, the agent line, the cost line, Fix) for its explanation.
 - When the page file changes, a banner offers "Reload here".
 - The draft stays when the page reloads.
 
@@ -79,7 +96,8 @@ and what Alt+click picks. Give it to the authors of the pages, people and agents
 
 A Markdown file (`.md`, `.markdown`) opens in the Markdown view: the browser renders it with markdown-it
 (from cdn.jsdelivr.net, so the view needs the internet; without it, the view shows the file as text).
-The panel stays open at the right side. `?raw` after the file name gives the file itself.
+The panel stays open at the right side, with the same layout as on an HTML page, and the text of the file moves left to make room for it.
+The panel has no ✕ there. `?raw` after the file name gives the file itself.
 
 LaTeX math is rendered with KaTeX (also from cdn.jsdelivr.net):
 
@@ -98,22 +116,42 @@ LaTeX math is rendered with KaTeX (also from cdn.jsdelivr.net):
   and a note gives the edit to the agent. The agent finishes the edit (the language of the project, the grammar, the style)
   and changes the rest of the file and the other files of the project that the edit makes wrong.
 - With no change in the text, "Save" sends only the note about the block.
-- `Esc` or "Cancel": close the block, the file stays as it was.
-- If the file changed and has no such block now, the server refuses the edit. Copy your text, cancel and edit again.
+- "Save only": the server writes the new text to the file, and makes no note. The agent does not start.
+- `Esc`, "Cancel", a click outside the editor or the ✎ of another block: close the editor, the file stays as it was.
+  A changed text (or note) stays as the draft of the block: the next ✎ on the block opens it again, and the ✎ of the block
+  stays visible with a mark. The drafts live in this page only: a reload drops them. With a change, Cancel stands out,
+  and "Reset" takes the editor back to the text of the file and drops the draft.
+- If the block changed while you edited it (often the agent changed it), the server does not write your text.
+  It gives the edit to the agent as a note, also after "Save only": the agent merges your edit into the current text.
+  The note goes to the session that changes the page now, else to the session that changed it last.
+  The view shows the current file, and the panel marks the note "the block changed: the agent merges it".
 - When the file changes, the view renders it again; during an edit, after the edit.
 
-The panel shows each edit as the text before and after.
+The panel shows each edit as the text before and after. "open here" on an edit, or on a note about a block, highlights the block for a moment.
+If the file changed since then, the view looks for the block by its line, then by its text.
 
 ## The agent
 
 The server runs a headless Claude Code (`claude -p --permission-mode auto`) in the folder with the pages. [agent.md](agent.md) is its task.
 
-- The agent starts on a new note or on the Start button, never on the server start. While open notes exist, it takes task after task.
-- One task: up to 3 related open notes of one page. The agent marks them `wip`.
-- A task runs with the model of the oldest open note.
+- A new note does not start the agent at once. The agent starts on the Fix (or Start) button, or by itself 2 minutes
+  (`--delay`) after the last new note: each new note starts the count again. While open notes exist, it takes task after task.
+  While an agent runs, new notes wait in the queue for the next task.
+- The agent does not start on the server start. Only a count that the last server did not finish goes on: the time left, or the full delay.
 - Each model has its own session. The next task of a model resumes the session until the context reaches 100k tokens; then a new session starts.
   Each session has a short name (`a1`, `a2`, ...). The panel shows it on each note.
-- The Stop button kills the agent and turns the start on new notes off. Start turns it on. `open.mjs --stop` and `Ctrl+C` on the server kill the agent too.
+- The server chooses the notes of each task ([queue.mjs](queue.mjs)), marks them `wip` and names them in the task:
+  - A task starts with the oldest open note of its model, and takes up to 2 more open notes at the same place
+    (the same page and the same hash of the place), the oldest first. 3 notes at most.
+  - Opus also takes the Sonnet notes at the place of its note: one task instead of two. Sonnet never takes an Opus note.
+  - A switch of the model starts with a cold prompt cache. So the model of the last task keeps the turn while it has a note to start with,
+    if that task ended less than 5 minutes ago and kept its session. But the other model gets the turn when its oldest note is older
+    by more than 10 minutes. With no such model, the oldest note chooses the model.
+  - A reply goes to the session that closed its note, with the model of that session, while that session is the current session
+    of its model. After a new session of that model, the reply goes as a usual note. A reply sent with a stronger model
+    (Ω to a note that Sonnet closed) goes to the stronger model.
+- The Stop button kills the agent and turns the start by itself off. Fix or Start starts the agent and turns it on again.
+  `open.mjs --stop` and `Ctrl+C` on the server kill the agent too.
 - The notes that a stopped agent left in `wip` go back to the queue: when it exits, when it prints nothing for 15 min
   (the server kills it), and on the server start. After 2 such stops a note becomes `stuck`, and the agents skip it.
 - A task that closes no note stops the queue with an error, so that a broken agent does not restart forever.
@@ -131,7 +169,8 @@ The page `/` shows the agent status and its output. The server output (`.review/
 | `servers.mjs` | The review servers of this computer: find, start, stop, restart. |
 | `server.mjs` | The HTTP server: the pages with the panel, the table of contents and the API. |
 | `store.mjs` | The notes and the replies in the data folder. |
-| `agent.mjs` | Runs the agent: the queue, the sessions, the cost. |
+| `agent.mjs` | Runs the agent: the start, the sessions, the cost. |
+| `queue.mjs` | Chooses the notes and the model of the next task. |
 | `agent.md` | The task of the agent. |
 | `panel.js` | The panel in the page. |
 | `markdown.html`, `markdown.js` | The Markdown view. |
@@ -144,10 +183,10 @@ The data folder:
 
 | File | Who writes it | What it is |
 |---|---|---|
-| `notes.jsonl` | the server | The notes, one JSON object per line. |
-| `replies.json` | the agent and the server | `{id: {status, reply, session, started, tries, cost, ms, sessions}}`. Status: `open`, `wip`, `fixed`, `no`, `stuck`. A note with no entry is open. |
+| `notes.jsonl` | the server | The notes, one JSON object per line. A reply has `re`: the id of its note. `to`: the session that the server gave the note to (an edit of a block that changed meanwhile). |
+| `replies.json` | the agent and the server | `{id: {status, reply, session, started, tries, cost, ms, sessions, accepted}}`. Status: `open`, `wip`, `fixed`, `no`, `stuck`. A note with no entry is open. `accepted`: the time of "Looks good". |
 | `last-id` | the server | The number of the last note, so that the id of a deleted note is not used again. |
-| `agent.json` | the server | The session of each model and the short names of the sessions. |
+| `agent.json` | the server | The session of each model, the short names of the sessions and the time of the start by itself (`due`). |
 | `agent.log` | the server | The full output of the agents. |
 | `server.log` | `open.mjs` | The output of the server that `open.mjs` started. |
 | `.gitignore` | the server | `*`: git ignores the data folder. |

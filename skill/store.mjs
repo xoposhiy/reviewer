@@ -1,7 +1,7 @@
 // The review data, all in one folder:
 // - notes.jsonl: the notes, one JSON object per line. Only the server writes this file.
-// - replies.json: {id: {status, reply, session, started, tries, cost, ms, sessions}}. The review agent and the server write it.
-//   A note with no entry is open.
+// - replies.json: {id: {status, reply, session, started, tries, cost, ms, sessions, accepted}}. The review agent and the server write it.
+//   A note with no entry is open. `accepted`: the time when the reviewer accepted the result of a closed note.
 // - last-id: the number of the last note, so that the id of a deleted note is not used again.
 import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -66,6 +66,26 @@ export async function createStore(dir) {
       await appendFile(NOTES, JSON.stringify(note) + '\n');
       await writeFile(LAST_ID, String(id));
       return note;
+    }),
+    // The server gives the notes `ids` to a task: the notes that still exist and are open become `wip` with `fields`
+    // (the session and the start time of the task). Gives the ids of these notes.
+    take: (ids, fields) => serial(async () => {
+      const exist = new Set((await readNotes()).map(n => n.id));
+      const all = await readReplies(true);
+      const taken = ids.filter(id => exist.has(id) && (all[id]?.status ?? 'open') === 'open');
+      for (const id of taken) all[id] = { ...all[id], status: 'wip', ...fields };
+      if (taken.length) await writeReplies(all);
+      return taken;
+    }),
+    // The reviewer accepts the result of a closed note (on: true), or takes the acceptance back. The status stays.
+    accept: (id, on) => serial(async () => {
+      const all = await readReplies(true);
+      if (!(await readNotes()).some(n => n.id === id)) return { error: 'no such note' };
+      if (!CLOSED.has(all[id]?.status)) return { error: 'the note is not closed' };
+      if (on) all[id].accepted = new Date().toISOString();
+      else delete all[id].accepted;
+      await writeReplies(all);
+      return { id, accepted: all[id].accepted ?? null };
     }),
     // a note in work stays: the agent works on it
     remove: id => serial(async () => {

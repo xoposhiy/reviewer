@@ -20,8 +20,7 @@
   header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
   h1 { font-size: 21px; margin: 0 auto 0 0; overflow-wrap: anywhere; }
   h1 a { color: var(--muted); }
-  .agent { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
-  .agent span { max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .agent { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); white-space: nowrap; cursor: default; }
   .agent span::before, .servers .state::before { content: '● '; color: var(--state); }
   #root { margin: 2px 0 12px; color: var(--faint); font-size: 12.5px; overflow-wrap: anywhere; }
 
@@ -69,7 +68,6 @@
   footer summary { cursor: pointer; padding: 3px 8px; font-size: 13.5px; color: var(--muted); border-radius: 6px; }
   footer summary:hover { background: var(--hover); }
   footer .body { padding: 4px 8px 8px 24px; font-size: 14px; }
-  .log { font: 12px/1.45 ui-monospace, monospace; white-space: pre-wrap; max-height: 320px; overflow: auto; margin: 0; color: var(--muted); }
   .servers li { margin: 6px 0; }
   .servers .root { overflow-wrap: anywhere; }
   .servers .line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
@@ -82,7 +80,7 @@
 <body>
 <header>
   <h1 id="title">Review</h1>
-  <div class="agent" title="The review agent of this project"><span></span><button></button></div>
+  <div class="agent"><span></span><button hidden title="Stop the agent">Stop</button></div>
 </header>
 <p id="root"></p>
 <div class="search">
@@ -91,7 +89,6 @@
 </div>
 <main></main>
 <footer>
-  <details class="output"><summary>Agent output</summary><div class="body"><pre class="log"></pre></div></details>
   <details class="servers"><summary>Review servers of this computer</summary><div class="body"><ul></ul><p class="muted" hidden></p></div></details>
   <p class="keys"><kbd>/</kbd> find a page · <kbd>↑</kbd> <kbd>↓</kbd> choose · <kbd>Enter</kbd> open · <kbd>←</kbd> <kbd>→</kbd> close or open a folder · <kbd>Esc</kbd> clear the search</p>
 </footer>
@@ -312,20 +309,28 @@
 
   // ---- The agent and the servers ----
 
-  const strip = document.querySelector('.agent'), log = document.querySelector('.log'), button = strip.querySelector('button');
+  // One short line for the agent of this project; the full status is its tooltip. Fix in the panel starts the agent: here is only Stop.
+  const strip = document.querySelector('.agent'), button = strip.querySelector('button');
+  const clockOf = ms => { const s = Math.ceil(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+  function short(a) {
+    const notes = `${plural(a.open, 'note')} wait${a.open === 1 ? 's' : ''}`, wait = a.open ? ' · ' + notes : '';
+    if (a.state === 'working') return 'Agent works' + wait;
+    if (a.state === 'stopping') return 'Agent stops…';
+    if (a.state === 'stopped') return 'Agent stopped' + wait;
+    if (a.state === 'error') return 'Agent error' + wait;
+    if (a.open && a.autoIn != null) return `${notes} · auto in ${clockOf(a.autoIn)}`;
+    return 'Agent idle' + wait;
+  }
   function showAgent(a) {
     strip.style.setProperty('--state', STATE_COLOR[a.state]);
-    strip.querySelector('span').textContent = 'Agent: ' + a.text;
-    strip.querySelector('span').title = a.text;
-    button.textContent = a.action === 'stop' ? 'Stop' : 'Start';
-    button.onclick = () => post('agent/' + a.action).then(showAgent);
-    const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
-    log.textContent = a.log.join('\n') || 'No output yet.';
-    if (atEnd) log.scrollTop = log.scrollHeight;
+    strip.querySelector('span').textContent = short(a);
+    strip.title = a.text;
+    button.hidden = a.state !== 'working';
   }
+  button.onclick = () => { button.hidden = true; post('agent/stop').then(showAgent).catch(() => {}); };
   let gone = false;  // this server was stopped or restarted from this page
   const agent = () => gone || fetch('/__review/agent').then(r => r.json()).then(showAgent)
-    .catch(() => showAgent({ state: 'error', text: 'The server does not answer.', action: 'start', log: [] }));
+    .catch(() => showAgent({ state: 'error', text: 'The server does not answer.' }));
 
   // The review servers of this computer, one per project, with Stop and Restart.
   const box = document.querySelector('.servers'), list = box.querySelector('ul'), note = box.querySelector('p');

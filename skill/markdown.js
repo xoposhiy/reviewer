@@ -4,6 +4,8 @@
 // and a top-level list has a button for the whole list.
 // LaTeX math, \[ … \], $$ … $$ and \( … \), is rendered with KaTeX.
 // "Save" sends the edit to the server: the server changes the file at once, and a note asks the agent to finish the edit.
+// "Save only" changes the file and makes no note.
+// "open here" in the panel: the view highlights the block of an edit, or of a note about a block (`review:highlight`).
 // When the file changes, the panel sends `review:changed`, and the view renders the file again.
 (() => {
   const { page: PAGE, models, project: PROJECT } = document.currentScript.dataset;
@@ -146,6 +148,7 @@
     const env = {};
     doc.innerHTML = (front ? `<div class="block" data-from="0" data-to="${shift}" data-end="${shift}">${BUTTON}<pre class="front-matter">${esc(front)}</pre></div>` : '') +
       md.renderer.render(blocks(md.parse(source.slice(front.length), env), shift, lines().length), md.options, env);
+    markDrafts();
   }
 
   // stale: the file changed during an edit; the view renders it again when the edit ends
@@ -156,6 +159,8 @@
     if (!r.ok) return fail(`${r.status} ${r.statusText}`);
     error.hidden = true;
     const text = await r.text();
+    // an edit opened during the fetch
+    if (editing) return void (stale = true);
     // the same text: the view stays, with the hover and the selection
     if (text === source && doc.childElementCount) return;
     source = text;
@@ -173,13 +178,31 @@
     return { where: [h && squash(h.textContent).slice(0, 100), linesOf(from, to)].filter(Boolean).join(' · '), hash: h?.id || '' };
   }
 
-  // wide: edit the whole section of a heading or the whole list, not only the block
-  function edit(block, wide) {
-    if (editing) return editing.querySelector('textarea').focus();
-    let from = +block.dataset.from, to = +(wide ? block.dataset.end : block.dataset.to);
-    const all = lines();
+  // the lines of a block in the file and their text; wide: the whole section of a heading or the whole list
+  function rangeOf(block, wide) {
+    const from = +block.dataset.from, all = lines();
+    let to = +(wide ? block.dataset.end : block.dataset.to);
     while (to > from + 1 && !all[to - 1].trim()) to--;  // a block can end with empty lines
-    const before = all.slice(from, to).join('\n');
+    return { from, to, before: all.slice(from, to).join('\n') };
+  }
+
+  // The drafts: the text and the note of a closed editor that differ from the file, by the text of the block.
+  // They live only in this page: a reload drops them.
+  const drafts = new Map();
+  const draftKey = (before, wide) => (wide ? 'wide\n' : '') + before;
+  function markDrafts() {
+    if (!drafts.size) return doc.querySelectorAll('.edit.draft').forEach(b => b.classList.remove('draft'));
+    for (const b of doc.querySelectorAll('.block > .edit')) {
+      const wide = b.classList.contains('wide');
+      b.classList.toggle('draft', drafts.has(draftKey(rangeOf(b.parentElement, wide).before, wide)));
+    }
+  }
+
+  // An editor with no change closes on a click outside it or on the ✎ of another block.
+  // An editor with a change closes the same way, and its text stays as the draft of the block.
+  function edit(block, wide) {
+    editing?.close();
+    const { from, to, before } = rangeOf(block, wide), key = draftKey(before, wide);
     // the elements that the editor takes the place of: the block, and for a section each block up to its end
     const hide = [block];
     if (wide) for (let n = block.nextElementSibling; n && !(+n.dataset.from >= to); n = n.nextElementSibling) hide.push(n);
@@ -189,37 +212,49 @@
     box.innerHTML = `<textarea spellcheck="true"></textarea>` +
       `<input placeholder="A note to the agent (optional)"><div class="row"><span>${esc(HINT)}</span>` +
       Object.entries(MODELS).map(([m, letter]) => `<button data-model="${esc(m)}" title="Save: a ${esc(m)} agent finishes the edit">${esc(letter)} Save</button>`).join('') +
-      '<button class="cancel">Cancel</button></div>';
+      '<button class="only" title="Write the text to the file; no note, no agent">Save only</button>' +
+      '<button class="reset" title="Back to the text of the file; the draft goes">Reset</button>' +
+      '<button class="cancel" title="Close; a changed text stays as the draft of this block until the page reloads">Cancel</button></div>';
     block.before(box);
     hide.forEach(n => { n.hidden = true; });
     editing = box;
     const text = box.querySelector('textarea'), note = box.querySelector('input'), hint = box.querySelector('span');
     const fit = () => { text.style.height = 'auto'; text.style.height = text.scrollHeight + 2 + 'px'; };
-    text.value = before;
-    text.addEventListener('input', fit);
+    const changed = () => text.value.replace(/\s+$/, '') !== before || !!note.value.trim();
+    const mark = () => box.classList.toggle('changed', changed());
+    const draft = drafts.get(key);
+    text.value = draft?.text ?? before;
+    note.value = draft?.note ?? '';
+    text.addEventListener('input', () => { fit(); mark(); });
+    note.addEventListener('input', mark);
     fit();
+    mark();
     text.focus();
 
     const close = () => {
+      if (changed()) drafts.set(key, { text: text.value, note: note.value }); else drafts.delete(key);
       editing = null;
       box.remove();
       hide.forEach(n => { n.hidden = false; });
-      if (stale) { stale = false; load(); }
+      if (stale) { stale = false; load(); } else markDrafts();
     };
+    box.close = close;
+    // model: none for "Save only"
     async function save(model) {
-      const after = text.value.replace(/\s+$/, ''), comment = note.value.trim();
+      const after = text.value.replace(/\s+$/, ''), comment = model ? note.value.trim() : '';
       if (after === before && !comment) return close();
       // no change, only a note: a plain note about the block
       const [path, body] = after === before
         ? ['notes', { page: PAGE, text: comment, model, ctx, el: { text: squash(before).slice(0, 160), path: linesOf(from, to) } }]
-        : ['edit', { page: PAGE, from, before, after, text: comment, model, ctx }];
+        : ['edit', model ? { page: PAGE, from, before, after, text: comment, model, ctx } : { page: PAGE, from, before, after, note: false, ctx }];
       const r = await fetch('/__review/' + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
       const answer = await r.json().catch(() => ({}));
       if (!r.ok) {
-        hint.textContent = `Not saved: ${answer.error || r.statusText}. Copy the text, cancel and edit again.`;
+        hint.textContent = `Not saved: ${answer.error || r.statusText}.`;
         hint.className = 'error';
         return;
       }
+      drafts.delete(key);
       // the answer to an edit has the new text of the file; the answer to a note is the note
       if (path === 'notes') close();
       else { editing = null; stale = false; source = answer.text; render(); }
@@ -232,6 +267,8 @@
     box.addEventListener('click', e => {
       const b = e.target.closest('button');
       if (b?.dataset.model) save(b.dataset.model);
+      else if (b?.classList.contains('only')) save();
+      else if (b?.classList.contains('reset')) { text.value = before; note.value = ''; fit(); mark(); text.focus(); }
       else if (b?.classList.contains('cancel')) close();
     });
   }
@@ -239,6 +276,38 @@
   doc.addEventListener('click', e => {
     const b = e.target.closest('button.edit');
     if (b && !e.altKey) edit(b.closest('.block'), b.classList.contains('wide'));
+  });
+  // a click outside the editor closes it; the panel (<review-panel>) and the ✎ buttons are not outside
+  document.addEventListener('click', e => {
+    if (editing && !editing.contains(e.target) && !e.target.closest?.('review-panel, button.edit')) editing.close();
+  });
+
+  // ---- Highlight a note ----
+
+  // "open here" in the panel: highlight the blocks of an edit or of a note about a block ("lines 102–105"), and scroll to them.
+  // The file may have changed since the note: the lines of the note when they still start with its text,
+  // else the first lines that start with its text, else the lines of the note.
+  function blocksOf(n) {
+    const m = String(n.el?.path || '').match(/^lines? (\d+)(?:–(\d+))?$/);
+    const [line, count, text] = n.edit ? [n.edit.line - 1, (n.edit.after || '').split('\n').length, n.edit.after]
+      : m ? [m[1] - 1, (m[2] || m[1]) - m[1] + 1, n.el.text] : [];
+    if (line === undefined) return [];
+    const all = lines(), probe = squash(text).slice(0, 60);
+    const starts = i => squash(all.slice(i, i + count).join('\n')).startsWith(probe);
+    let from = line;
+    if (probe && !starts(line)) { const at = all.findIndex((l, i) => l.trim() && starts(i)); if (at >= 0) from = at; }
+    const to = from + count;
+    // the innermost blocks: an item, not its whole list
+    const found = [...doc.querySelectorAll('.block')].filter(b => !b.hidden && +b.dataset.from < to && +b.dataset.to > from);
+    return found.filter(b => !found.some(o => o !== b && b.contains(o)));
+  }
+  addEventListener('review:highlight', e => {
+    const found = blocksOf(e.detail);
+    if (!found.length) return;
+    e.preventDefault();
+    found[0].scrollIntoView({ block: 'center' });
+    // a new animation each time, also when the last one has not ended
+    for (const b of found) { b.classList.remove('flash'); void b.offsetWidth; b.classList.add('flash'); }
   });
 
   // the panel saw a change of the file: the view shows it, so the panel shows no banner

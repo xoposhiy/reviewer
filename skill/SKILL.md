@@ -41,7 +41,7 @@ reviewer <file> [file ...]
 
 ## 3. Notes
 
-The agent of the review server fixes the notes, so the notes are its work. Handle notes yourself only when the user asks: then read `.review/notes.jsonl` and `.review/replies.json` and work as [agent.md](agent.md) says.
+The agent of the review server fixes the notes, so the notes are its work. Handle notes yourself only when the user asks: then read `.review/notes.jsonl` and `.review/replies.json` and work as [agent.md](agent.md) says. Take the open notes that the user names, or all open notes, and mark them `wip` yourself.
 
 ## Change the tool
 

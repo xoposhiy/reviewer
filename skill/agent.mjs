@@ -1,7 +1,7 @@
-// The review agent: a headless Claude Code that fixes the open notes. agent.md is its task: up to 3 related notes at a time.
-// It starts on the Start button or on a new note, then takes task after task while open notes exist.
-// Each note names a model, Opus (Ω) or Sonnet (Σ); a task runs with the model of the oldest open note.
-// Each model has its own session: the next task of the model resumes it, until its context reaches MAX_TOKENS.
+// The review agent: a headless Claude Code that fixes the open notes. agent.md is its task; queue.mjs chooses the notes of each task.
+// It starts on the Start (Fix) button, or by itself `delay` after the last new note; then it takes task after task while open notes exist.
+// Each note names a model, Opus (Ω) or Sonnet (Σ). Each model has its own session: the next task of the model resumes it,
+// until its context reaches MAX_TOKENS.
 // When an agent exits, hangs or the server restarts, the notes that the agent left in `wip` go back to the queue.
 // After MAX_TRIES such stops a note becomes `stuck`, and the agents skip it.
 // The cost and the time of a task are split equally between the notes of the task (the fields `cost`, `ms`, `sessions`).
@@ -12,8 +12,14 @@ import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
 import { join, relative } from 'node:path';
 import { CLOSED } from './store.mjs';
+import { nextTask } from './queue.mjs';
 
 const MAX_TOKENS = 100_000, HUNG_MS = 15 * 60_000, MAX_TRIES = 2, NEXT_TASK_MS = 2000;
+// The agent starts by itself this long after the last new note: the reviewer often writes several notes in a row,
+// and one task can take the notes at one place together.
+export const DELAY_MS = 2 * 60_000;
+// the prompt cache of a session stays warm for about 5 minutes after its last request
+const CACHE_MS = 5 * 60_000;
 // the models (the aliases of `claude --model`) and their letters in the panel; the first one is the default
 export const MODELS = { opus: 'Ω', sonnet: 'Σ' };
 export const modelOf = m => (Object.hasOwn(MODELS, m) ? m : Object.keys(MODELS)[0]);
@@ -25,18 +31,25 @@ const ids = entries => entries.map(([id]) => id).join(', ');
 const words = s => s.match(/"[^"]*"|\S+/g).map(w => w.replace(/^"(.*)"$/, '$1'));
 
 // root: the project folder (the agent works there); dir: the data folder; task: the file of the task;
-// vars: the values of the {placeholders} in the task; command: the agent command, `claude` or a fake agent for tests
-export function createAgent({ root, dir, store, task, vars, command = 'claude' }) {
+// vars: the values of the {placeholders} in the task; command: the agent command, `claude` or a fake agent for tests;
+// delay: the time from the last new note to the start by itself (ms)
+export function createAgent({ root, dir, store, task, vars, command = 'claude', delay = DELAY_MS }) {
   const STATE = join(dir, 'agent.json'), LOG = join(dir, 'agent.log');
   const [cmd, ...pre] = words(command);
   // by: the session of each model and its context size, {opus: {session, tokens}, ...};
-  // names: the short name of each session (a1, a2, ...), so that the panel shows which agent works on a note
+  // names: the short name of each session (a1, a2, ...), so that the panel shows which agent works on a note;
+  // due: the time of the start by itself, so that it survives a restart of the server
   const saved = { by: {}, names: {}, next: 1, ...(existsSync(STATE) ? JSON.parse(readFileSync(STATE, 'utf8')) : {}) };
   const slot = model => (saved.by[model] ||= { session: null, tokens: 0 });
   const name = session => saved.names[session];
-  const save = () => writeFile(STATE, JSON.stringify(saved, null, 2));
-  // auto: a new note starts the agent; the Stop button turns it off
-  let run = null, starting = false, auto = true, error = '';
+  // the writes go one after another: two writes at once can mix in the file
+  let saving = Promise.resolve();
+  const save = () => (saving = saving.catch(() => {}).then(() => writeFile(STATE, JSON.stringify(saved, null, 2))));
+  const sessions = () => Object.fromEntries(Object.keys(MODELS).map(m => [m, saved.by[m]?.session || null]));
+  // auto: the agent starts by itself after new notes; the Stop button turns it off.
+  // timer: the start by itself; last: the model of the last task and the time when it ended
+  let run = null, starting = false, auto = true, error = '', timer = null, last = null;
+  const warm = () => (last && Date.now() - last.ended < CACHE_MS && saved.by[last.model]?.session ? last.model : null);
   const log = [];
 
   function say(s) {
@@ -99,17 +112,37 @@ export function createAgent({ root, dir, store, task, vars, command = 'claude' }
     }
   }
 
+  // The start by itself, `ms` from now; a new call restarts the count. No start by itself while an agent runs:
+  // the agent takes the new notes in a later task.
+  function later(why, ms = delay) {
+    if (run || !auto) return;
+    clearTimeout(timer);
+    saved.due = Date.now() + ms;
+    timer = setTimeout(() => { cancel(); start(`by itself, after the ${why}`); }, ms);
+    save().catch(e => say('state not saved: ' + e.message));
+  }
+  function cancel() {
+    clearTimeout(timer);
+    timer = null;
+    if (!saved.due) return;
+    delete saved.due;
+    save().catch(e => say('state not saved: ' + e.message));
+  }
+
   async function start(why) {
     if (run || starting || !auto) return;
     starting = true;
     try {
-      const first = (await store.notes()).find(n => n.status === 'open');
-      if (!first) return;
-      const model = modelOf(first.model), my = slot(model);
+      const next = nextTask(await store.notes(), { models: Object.keys(MODELS), sessions: sessions(), warm: warm() });
+      if (!next) return;
+      const model = next.model, my = slot(model);
       const resume = !!my.session, session = my.session || randomUUID(), started = new Date().toISOString();
-      const values = { ...vars, session, time: started };
-      const prompt = (await readFile(task, 'utf8')).replace(/\{(\w+)\}/g, (m, k) => values[k] ?? m);
-      const closed = await closedIds();
+      const text = await readFile(task, 'utf8'), closed = await closedIds();
+      // the server marks the notes of the task `wip`, and the task names them: the agent works only on them
+      const taken = await store.take(next.notes.map(n => n.id), { session, started });
+      if (!taken.length) return;
+      const values = { ...vars, session, time: started, ids: taken.join(', ') };
+      const prompt = text.replace(/\{(\w+)\}/g, (m, k) => values[k] ?? m);
       const env = { ...process.env };
       delete env.CLAUDECODE; delete env.CLAUDE_CODE_ENTRYPOINT;  // the agent is not a nested Claude Code
       const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'auto', '--model', model, resume ? '--resume' : '--session-id', session];
@@ -119,9 +152,10 @@ export function createAgent({ root, dir, store, task, vars, command = 'claude' }
       saved.names[session] ||= `a${saved.next++}`;
       my.session = session;
       error = '';
+      cancel();
       run = { child, model, session, started, slot: my, name: name(session), last: Date.now(), closed, stopped: null };
       save().catch(e => say('state not saved: ' + e.message));
-      say(`start (${why}): ${model}, ${resume ? 'same agent' : 'new agent'}, session ${session.slice(0, 8)}, ${kTokens(my.tokens)}`);
+      say(`start (${why}): ${taken.join(', ')}, ${model}, ${resume ? 'same agent' : 'new agent'}, session ${session.slice(0, 8)}, ${kTokens(my.tokens)}`);
       child.stdin.on('error', () => {});  // the agent can exit before it reads the task
       child.stdin.end(prompt);
       createInterface({ input: child.stdout }).on('line', l => { try { onEvent(JSON.parse(l)); } catch { } });
@@ -131,9 +165,11 @@ export function createAgent({ root, dir, store, task, vars, command = 'claude' }
       child.on('error', e => { error = e.message; end(-1); });
       child.on('close', end);
     } catch (e) {
-      // no one awaits a start on a new note: an error here must not stop the server
+      // no one awaits a start by itself: an error here must not stop the server
       error = e.message;
       say('error: ' + error);
+      // with no run, each `wip` note is left from this start
+      if (!run) await release(null, 'the agent did not start', false).catch(() => {});
     } finally { starting = false; }
   }
 
@@ -150,6 +186,7 @@ export function createAgent({ root, dir, store, task, vars, command = 'claude' }
       say(`end: ${why}, ${closed} note(s) closed, ${kTokens(r.slot.tokens)}`);
       if (r.slot.tokens >= MAX_TOKENS) say(`the session is full: the next ${r.model} task goes to a new agent`);
       if (code !== 0 || r.slot.tokens >= MAX_TOKENS) Object.assign(r.slot, { session: null, tokens: 0 });
+      last = { model: r.model, ended: Date.now() };
       await save();
     } catch (e) {
       error = e.message;
@@ -171,7 +208,7 @@ export function createAgent({ root, dir, store, task, vars, command = 'claude' }
     else try { process.kill(-run.child.pid, 'SIGKILL'); } catch { }
   }
   function stop(why) {
-    if (why === 'button') auto = false;
+    if (why === 'button') { auto = false; cancel(); }
     if (!run) return;
     run.stopped = why;
     kill();
@@ -179,28 +216,36 @@ export function createAgent({ root, dir, store, task, vars, command = 'claude' }
   }
   setInterval(() => { if (run && !run.stopped && Date.now() - run.last > HUNG_MS) stop('hung: no output for 15 min'); }, 30_000).unref();
 
+  // open: the count of the notes in the queue; autoIn: the time to the start by itself (ms), or null;
+  // limit: the context size at which the next task of a model starts a new session
   async function status() {
     // read first, then look at the run: a task can end during the read
-    const replies = await store.replies();
+    const notes = await store.notes();
     const r = run;
     const state = r ? (r.stopped ? 'stopping' : 'working') : !auto ? 'stopped' : error ? 'error' : 'idle';
     let text;
     if (state === 'working') {
-      const wip = Object.entries(replies).filter(([, x]) => x.status === 'wip' && x.session === r.session);
-      text = `${MODELS[r.model]} ${r.name} works on ${ids(wip) || 'a task'} · ${kTokens(r.slot.tokens)} · since ${clock(r.started).slice(0, 5)}`;
+      const wip = notes.filter(n => n.status === 'wip' && n.session === r.session).map(n => n.id).join(', ');
+      text = `${MODELS[r.model]} ${r.name} works on ${wip || 'a task'} · ${kTokens(r.slot.tokens)} · since ${clock(r.started).slice(0, 5)}`;
     } else if (state === 'stopping') text = `${r.name} stops…`;
-    else if (state === 'stopped') text = 'Stopped. New notes wait for Start.';
-    else if (state === 'error') text = `Error: ${error}. Press Start to try again.`;
+    else if (state === 'stopped') text = 'Stopped. The notes wait for Fix or Start.';
+    else if (state === 'error') text = `Error: ${error}. Press Fix or Start to try again.`;
     else text = 'Idle · ' + Object.entries(MODELS)
       .map(([m, letter]) => `${letter} ${saved.by[m]?.session ? `${name(saved.by[m].session)}, ${kTokens(saved.by[m].tokens)}` : 'no session'}`).join(' · ');
-    return { state, text, action: auto && !error ? 'stop' : 'start', log: log.slice(-40) };
+    const open = notes.filter(n => n.status === 'open').length, autoIn = !r && timer ? Math.max(0, saved.due - Date.now()) : null;
+    return { state, text, action: auto && !error ? 'stop' : 'start', open, autoIn, limit: MAX_TOKENS, log: log.slice(-40) };
   }
 
   return {
-    // no agent runs when the server starts, so each `wip` note is left from an earlier run
-    init: () => release(null, 'the server restarted', false),
-    kick: why => start(why),
-    start: () => { auto = true; error = ''; return start('button'); },
+    // No agent runs when the server starts, so each `wip` note is left from an earlier run.
+    // A start by itself that the last server did not reach waits again: the time left, or the full delay when the time has passed.
+    init: async () => {
+      await release(null, 'the server restarted', false);
+      if (saved.due) later('server restart', Math.max(saved.due - Date.now(), 0) || delay);
+    },
+    // a new note: the agent starts by itself `delay` after the last new note
+    kick: why => later(why),
+    start: () => { auto = true; error = ''; cancel(); return start('button'); },
     stop: () => stop('button'),
     // the server stops: the notes of the agent go back to the queue on the next start
     shutdown: () => { if (run) { run.stopped = 'server stopped'; kill(); } },

@@ -33,7 +33,8 @@ Options (after `--`, for example `npm run deploy -- --restart`):
 |---|---|
 | `--only <claude\|codex>` | Install into one agent only. |
 | `--skip-tests` | Install without the tests. |
-| `--restart` | Restart the running review servers, so that they run the new code. |
+| `--restart` | Restart the running review servers, so that they run the new code. A server whose agent works on notes (the state `working` or `stopping`) does not restart: the command lists it and ends with an error. |
+| `--force` | With `--restart`: restart the servers with a working agent too. The restart stops the agent. |
 
 ## Develop
 

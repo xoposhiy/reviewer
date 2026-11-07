@@ -73,7 +73,8 @@ The server adds the panel to each HTML page that it serves. The panel follows th
 - Next to ✕ of an attached element, "⋯" shows two buttons: "Can't pick a smaller part" and "Picks the wrong part".
   Each sends a note at once, to Opus: a task to fix the page markup, so that Alt+click picks the right part. The draft text goes after the task.
 - While open notes wait and no agent runs, the agent line has the button "Fix 3 · auto in 1:40": the count of the open notes
-  of the project and the time to the start by itself. "Fix" starts the agent at once. The ✎ button of the closed panel pulses then.
+  of the project and the time to the start by itself. "Fix" starts the agent at once. With the panel closed, the same button
+  "▶ Fix 3 · auto in 1:40" is next to "✎ Note", so you see that the work did not start yet.
 - Each note keeps its place on the page. "open here" opens that place again and highlights for a moment what the note is about:
   the quoted text (in browsers with the CSS Custom Highlight API), else the attached element. If the page has neither of them now,
   it stays at the place.

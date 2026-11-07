@@ -2,6 +2,7 @@
 // The panel lies over the page at the right side, full height. The ✎ button at the bottom right: open the panel;
 // Esc, ✕ or a click on the page: close it. Alt+click on the page: attach the element under the cursor to the note.
 // Text selected on the page goes with the note as a quote, and the selection opens the panel.
+// While open notes wait and no agent runs, the "▶ Fix" button next to ✎ starts the agent with the panel closed.
 // Ctrl+Enter or "Ω Send": send the note to the first model (Opus); Ctrl+Shift+Enter or "Σ Send": to the second model (Sonnet).
 // PAGES.md says what a page does for the panel: it tells its place (window.reviewState) and opens a place from the hash.
 // The panel lives in a shadow root, so the styles of the page and of the panel do not mix,
@@ -242,15 +243,16 @@
     a { color: var(--accent); cursor: pointer; text-decoration: none; }
     a:hover { text-decoration: underline; }
     button:focus-visible, a:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
-    .open-button, .panel { position: fixed; z-index: 2147483000; }
-    .open-button { right: 16px; bottom: 16px; padding: 7px 12px; background: var(--bg); font: 600 13px/1.4 system-ui, sans-serif; }
+    .corner, .panel { position: fixed; z-index: 2147483000; }
+    .corner { right: 16px; bottom: 16px; display: flex; gap: 8px; }
+    .corner button { padding: 7px 12px; background: var(--bg); font: 600 13px/1.4 system-ui, sans-serif; white-space: nowrap; }
     .open-button:hover { border-color: var(--accent); }
     .open-button i { font-style: normal; margin-left: 8px; padding: 0 6px; background: var(--muted); color: var(--bg); }
-    .open-button.due { border-color: var(--fill); animation: pulse 2s ease-in-out infinite; }
-    .open-button.due i { background: var(--fill); color: var(--on-fill); }
+    .corner .fix { border-color: var(--fill); background: var(--fill); color: var(--on-fill); }
     /* a square ring that grows and fades */
     @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--fill) 55%, transparent); } 50% { box-shadow: 0 0 0 5px transparent; } }
-    @media (prefers-reduced-motion: reduce) { .open-button.due, .agent .fix { animation: none; } }
+    .fix { animation: pulse 2s ease-in-out infinite; }
+    @media (prefers-reduced-motion: reduce) { .fix { animation: none; } }
     .panel { right: 0; top: 0; bottom: 0; width: ${PANEL_PX}px; max-width: 100vw; display: flex; flex-direction: column;
       background: var(--bg); color: var(--fg); border-left: 1px solid var(--line); font: 14px/1.45 system-ui, sans-serif; }
     .panel > :not(ol) { flex: none; }
@@ -264,7 +266,7 @@
     .agent span::before, li .status::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 6px; vertical-align: 1px; background: currentColor; }
     .agent span::before { background: var(--state); }
     .agent .fix, .send button:first-of-type { border-color: var(--fill); background: var(--fill); color: var(--on-fill); font-weight: 600; }
-    .agent .fix { white-space: nowrap; animation: pulse 2s ease-in-out infinite; }
+    .agent .fix { white-space: nowrap; }
     .send button + button { border-color: var(--accent); color: var(--accent); font-weight: 600; }
     .remove, .more, .close { border: 0; padding: 0 4px; color: var(--muted); }
     .remove:hover, .more:hover, .close:hover { color: var(--fg); }
@@ -315,7 +317,7 @@
       padding: 6px 6px 6px 14px; background: var(--fill); color: var(--on-fill); font: 600 13px/1.4 system-ui, sans-serif; }
     .updated button { border-color: currentColor; color: inherit; font-weight: 600; }
   </style>
-  <button class="open-button" title="${OPEN_HINT}">✎ Note<i hidden title="The notes of this page that are not closed"></i></button>
+  <div class="corner"><button class="fix" hidden></button><button class="open-button" title="${OPEN_HINT}">✎ Note<i hidden title="The notes of this page that are not closed"></i></button></div>
   <div class="panel" hidden>
     <div class="where"><b>Review</b> · <span title="Your place on the page: a new note keeps it"></span><a href="${esc(CONTENTS)}" title="The table of contents of this folder">☰ Contents</a><button class="close" title="Close the panel (Esc). The draft stays.">✕</button></div>
     <div class="spent" hidden title="What the agents spent on the notes of this page, the archive too: the cost in USD, the count of agent sessions and the time of agent work"></div>
@@ -331,7 +333,9 @@
   <div class="updated" hidden>The page was updated<button>Reload here</button></div>`;
   const $ = s => root.querySelector(s);
   const openButton = $('.open-button'), panel = $('.panel'), draft = $('textarea'), attached = $('.attached'), quote = $('.quote'), list = $('ol'), hint = $('.send span');
-  const replying = $('.replying'), fixButton = $('.agent .fix'), closeButton = $('.where .close');
+  const replying = $('.replying'), closeButton = $('.where .close');
+  // the Fix button in the agent line, and the one next to ✎ for the closed panel
+  const fixButtons = root.querySelectorAll('.fix'), cornerFix = $('.corner .fix');
   const HINT = `Ctrl+Enter: ${MODELS[FIRST]}${SECOND ? ` · +Shift: ${MODELS[SECOND]}` : ''}${DOCK ? '' : ' · Esc: close'}`;
   hint.textContent = HINT;
   hint.title = Object.keys(MODELS).map((m, i) => SEND_KEYS[i] && `${SEND_KEYS[i]}: send to ${agentOf(m)}`).filter(Boolean)
@@ -339,7 +343,7 @@
   document.head.insertAdjacentHTML('beforeend', '<style>[data-review-picked] { outline: 2px solid #2f81f7 !important; outline-offset: 2px !important; }' +
     (DOCK ? `html { margin-right: ${PANEL_PX}px; }` : '') + '</style>');
   document.body.append(host);
-  openButton.hidden = closeButton.hidden = DOCK;
+  $('.corner').hidden = closeButton.hidden = DOCK;
 
   // the keys, clicks and wheel turns in the panel do not go to the page: a deck must not turn a slide when one types a note
   for (const type of ['keydown', 'keyup', 'keypress', 'input', 'click', 'dblclick', 'mousedown', 'mouseup', 'pointerdown', 'pointerup', 'wheel', 'contextmenu'])
@@ -371,6 +375,7 @@
     if (DOCK && !open) return draft.blur();
     isOpen = open;
     panel.hidden = !open;
+    showFix();
     if (!open) return;
     showPlace();
     draft.focus();
@@ -553,21 +558,21 @@
     toggle.hidden = waiting(a) && a.action === 'start';
     showFix();
   }
-  fixButton.onclick = () => post('agent/start').then(showAgent).catch(() => {});
-  // the Fix button and the mark on the ✎ button, with the time to the start by itself
+  fixButtons.forEach(b => b.onclick = () => post('agent/start').then(showAgent).catch(() => {}));
+  // the Fix buttons, with the time to the start by itself. The one next to ✎ shows only with the panel closed:
+  // after a note is sent, the closed panel shows that the work did not start.
   function showFix() {
     const on = !!agent && waiting(agent);
-    fixButton.hidden = !on;
-    openButton.classList.toggle('due', on);
-    if (!on) return void (openButton.title = OPEN_HINT);
+    fixButtons.forEach(b => b.hidden = !on);
+    cornerFix.hidden = !on || isOpen;
+    if (!on) return;
     const left = autoAt && Math.max(0, autoAt - Date.now());
-    fixButton.textContent = `Fix ${agent.open}${autoAt ? (left ? ` · auto in ${clock(left)}` : ' · starts now') : ''}`;
+    const text = `Fix ${agent.open}${autoAt ? (left ? ` · auto in ${clock(left)}` : ' · starts now') : ''}`;
     const notes = `${agent.open} open note${agent.open === 1 ? '' : 's'}`;
-    fixButton.title = `Start the agent now. It fixes the ${notes} of the project (${here} on this page), the oldest first. ` +
+    const title = `Start the agent now. It fixes the ${notes} of the project (${here} on this page), the oldest first. ` +
       (autoAt ? 'Else it starts by itself at the end of the count; each new note starts the count again.'
         : agent.state === 'stopped' ? 'Stop turned off the start by itself.' : 'It does not start by itself on these notes.');
-    openButton.title = `${OPEN_HINT}. ${notes} wait for the agent: open the panel and press Fix` +
-      (autoAt ? `, or the agent starts by itself in ${clock(left)}.` : '.');
+    fixButtons.forEach(b => { b.textContent = (b === cornerFix ? '▶ ' : '') + text; b.title = title; });
   }
   setInterval(() => { if (autoAt) showFix(); }, 1000);
 
@@ -667,7 +672,7 @@
     badge.textContent = left;
     watch(r.mtime);
     here = r.notes.filter(n => n.status === 'open').length;
-    // also with the panel closed: the ✎ button shows that notes wait for Fix
+    // also with the panel closed: the Fix button next to ✎ shows that notes wait for the agent
     showAgent(r.agent);
     if (!isOpen) return;
     if (DOCK) showPlace();  // the Markdown view renders the headings after the panel starts

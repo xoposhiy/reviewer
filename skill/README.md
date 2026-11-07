@@ -83,7 +83,7 @@ The server adds the panel to each HTML page that it serves. The panel follows th
   - "Looks good" accepts the result. The note goes to "Archive (N)" at the bottom of the list; "Back to the list" takes it back.
     The cost line of the page counts the archive too.
 - "delete" removes a note at once, with no question. A note in work has no "delete": stop the agent first.
-- Hover over a short label (Ω, Σ, a2, a status, the agent line, the cost line, Fix) for its explanation.
+- Hover over a short label (Ω, Σ, o2, a status, the agent line, the cost line, Fix) for its explanation.
 - When the page file changes, a banner offers "Reload here".
 - The draft stays when the page reloads.
 
@@ -139,7 +139,7 @@ The server runs a headless Claude Code (`claude -p --permission-mode auto`) in t
   While an agent runs, new notes wait in the queue for the next task.
 - The agent does not start on the server start. Only a count that the last server did not finish goes on: the time left, or the full delay.
 - Each model has its own session. The next task of a model resumes the session until the context reaches 100k tokens; then a new session starts.
-  Each session has a short name (`a1`, `a2`, ...). The panel shows it on each note.
+  Each session has a short name: the first letter of its model and a number (`o1`, `o2` for Opus, `s1`, `s2` for Sonnet). The panel shows it on each note.
 - The server chooses the notes of each task ([queue.mjs](queue.mjs)), marks them `wip` and names them in the task:
   - A task starts with the oldest open note of its model, and takes up to 2 more open notes at the same place
     (the same page and the same hash of the place), the oldest first. 3 notes at most.

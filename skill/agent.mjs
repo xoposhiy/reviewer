@@ -37,9 +37,10 @@ export function createAgent({ root, dir, store, task, vars, command = 'claude', 
   const STATE = join(dir, 'agent.json'), LOG = join(dir, 'agent.log');
   const [cmd, ...pre] = words(command);
   // by: the session of each model and its context size, {opus: {session, tokens}, ...};
-  // names: the short name of each session (a1, a2, ...), so that the panel shows which agent works on a note;
+  // names: the short name of each session, the first letter of its model and a number of that model (o1, o2, s1, ...),
+  // so that the panel shows which agent works on a note; counts: the last number of each model;
   // due: the time of the start by itself, so that it survives a restart of the server
-  const saved = { by: {}, names: {}, next: 1, ...(existsSync(STATE) ? JSON.parse(readFileSync(STATE, 'utf8')) : {}) };
+  const saved = { by: {}, names: {}, counts: {}, ...(existsSync(STATE) ? JSON.parse(readFileSync(STATE, 'utf8')) : {}) };
   const slot = model => (saved.by[model] ||= { session: null, tokens: 0 });
   const name = session => saved.names[session];
   // the writes go one after another: two writes at once can mix in the file
@@ -149,7 +150,7 @@ export function createAgent({ root, dir, store, task, vars, command = 'claude', 
       // from here on, no await until the handlers are set: the agent can exit at once
       // detached: on Linux and macOS, kill() stops the whole process group of the agent
       const child = spawn(cmd, [...pre, ...args], { cwd: root, env, windowsHide: true, detached: process.platform !== 'win32' });
-      saved.names[session] ||= `a${saved.next++}`;
+      saved.names[session] ||= model[0] + (saved.counts[model] = (saved.counts[model] || 0) + 1);
       my.session = session;
       error = '';
       cancel();

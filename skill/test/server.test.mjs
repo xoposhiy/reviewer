@@ -151,7 +151,7 @@ test('the agent fixes the notes one task after another and resumes its session',
   assert.equal(fixed.reply, 'done');
   assert.equal(fixed.cost, 0.5);
   assert.equal(fixed.ms, 3000);
-  assert.equal(fixed.agent, 'a1');
+  assert.equal(fixed.agent, 'o1');
   assert.deepEqual(fixed.ctx, { where: 'A', hash: 'a' });
   assert.deepEqual(fixed.sel, sel);
   // the next note of the same model goes to the same session
@@ -180,7 +180,7 @@ test('Stop kills the agent; its note goes back to the queue and cannot be delete
   await until(async () => (await page(s, 'a.html')).notes[0].status === 'wip');
   const busy = await s.api('__review/notes?id=n1', { method: 'DELETE' });
   assert.equal(busy.code, 409);
-  assert.match((await s.api('__review/agent')).body.text, /^Σ a1 works on n1/);
+  assert.match((await s.api('__review/agent')).body.text, /^Σ s1 works on n1/);
   await s.api('__review/agent/stop', { method: 'POST' });
   const back = await until(async () => { const n = (await page(s, 'a.html')).notes[0]; return n.status === 'open' && n; });
   assert.match(back.reply, /stopped before the end \(button\)/);

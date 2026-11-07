@@ -508,9 +508,9 @@
   const STATE_COLOR = { working: 'var(--accent)', stopping: 'var(--muted)', idle: 'var(--faint)', stopped: 'var(--bad)', error: 'var(--bad)' };
   const tokens = a => `The tokens: the context of the session. At ${Math.round(a.limit / 1000)}k tokens the next task starts a new session.`;
   const STATE_HINT = {
-    working: a => `An agent works on these notes now. Ω: Opus, Σ: Sonnet; a1, a2, …: the agent sessions. ${tokens(a)}`,
+    working: a => `An agent works on these notes now. Ω: Opus, Σ: Sonnet; o1, s1, …: the agent sessions of Opus and Sonnet. ${tokens(a)}`,
     stopping: () => 'The agent stops. Its notes go back to the queue.',
-    idle: a => `No agent works now. For each model: the session that its next task resumes (a1, a2, …) and the context of that session. ${tokens(a)}`,
+    idle: a => `No agent works now. For each model: the session that its next task resumes (o1, s1, …) and the context of that session. ${tokens(a)}`,
     stopped: () => 'Stop turned the agent off: it does not start by itself. Fix or Start starts it.',
     error: () => 'The last task failed or closed no note, so the agent does not take the next task by itself. Fix or Start tries again.',
   };

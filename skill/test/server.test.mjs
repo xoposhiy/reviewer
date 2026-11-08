@@ -1,22 +1,29 @@
 // The server, the store and the agent queue, with a fake agent. Run: npm test (in the repo folder)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
-import { request } from 'node:http';
+import { spawn, spawnSync, execFile } from 'node:child_process';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { createServer, request } from 'node:http';
+import { randomUUID } from 'node:crypto';
+import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { nextTask, STAY_MS } from '../queue.mjs';
 import { recordsOf, viewOf } from '../session.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SERVER = join(HERE, '..', 'server.mjs'), FAKE = join(HERE, 'fake-agent.mjs');
+const OPEN = join(HERE, '..', 'open.mjs');
+const execute = promisify(execFile);
+const cli = (registry, ...args) => execute(process.execPath, [OPEN, ...args],
+  { env: { ...process.env, PAGE_REVIEW_REGISTRY: registry }, windowsHide: true });
 
 // a folder with pages and a server on a free port; mode: the mode of the fake agent;
 // delay: the seconds from the last new note to the start by itself (0: at once)
-async function serve(t, mode = 'fix', { delay = 0 } = {}) {
+async function serve(t, mode = 'fix', { delay = 0, registry } = {}) {
   const base = mkdtempSync(join(tmpdir(), 'review-')), root = join(base, 'root');
+  registry ??= join(base, 'registry');
   const put = (path, text) => { mkdirSync(dirname(join(root, path)), { recursive: true }); writeFileSync(join(root, path), text); };
   put('a.html', '<!doctype html><title>A</title><body><h1>A</h1></body>');
   put('sub/b.html', '<p>no body tag');
@@ -26,7 +33,7 @@ async function serve(t, mode = 'fix', { delay = 0 } = {}) {
   put('secret.txt', 'secret');
   put('doc.md', '# Doc\r\n\r\nOne line.\r\nTwo line.\r\n\r\n- item\r\n');
   const child = spawn(process.execPath, [SERVER, '--root', root, '--port', '0', '--delay', String(delay), '--agent', `"${process.execPath}" "${FAKE}"`],
-    { env: { ...process.env, FAKE_AGENT: mode }, windowsHide: true });
+    { env: { ...process.env, FAKE_AGENT: mode, PAGE_REVIEW_REGISTRY: registry }, windowsHide: true });
   const exited = new Promise(ok => child.on('exit', ok));
   let url;
   // quit, not kill: the server kills its agent too, and on Windows a running agent keeps the folder from deletion
@@ -37,9 +44,10 @@ async function serve(t, mode = 'fix', { delay = 0 } = {}) {
     rmSync(base, { recursive: true, force: true, maxRetries: 5 });
   });
   url = await new Promise((ok, fail) => {
-    let out = '';
+    let out = '', err = '';
+    child.stderr.on('data', d => { err += d; });
     child.stdout.on('data', d => { out += d; const m = out.match(/Review server: (\S+)/); if (m) ok(m[1]); });
-    child.on('exit', code => fail(new Error(`the server exited: ${code}`)));
+    child.on('exit', code => fail(new Error(`the server exited: ${code}\n${err}`)));
   });
   const api = async (path, init) => {
     const r = await fetch(url + path, init);
@@ -47,7 +55,7 @@ async function serve(t, mode = 'fix', { delay = 0 } = {}) {
   };
   const note = (body, headers = {}) =>
     api('__review/notes', { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
-  return { root, url, api, note };
+  return { root, url, api, note, registry, child, exited };
 }
 
 // wait until f gives a true value
@@ -68,6 +76,94 @@ async function page(s, path) {
 const raw = (url, path, headers = {}) => new Promise((ok, fail) => {
   const { hostname, port } = new URL(url);
   request({ hostname, port, path, headers }, r => { r.resume(); ok(r.statusCode); }).on('error', fail).end();
+});
+
+test('discovery checks registered addresses and removes records with the wrong server ID', async t => {
+  const s = await serve(t, 'idle');
+  const hello = (await s.api('__review/hello')).body;
+  const wrong = { ...hello, id: randomUUID(), port: +new URL(s.url).port };
+  writeFileSync(join(s.registry, wrong.id + '.json'), JSON.stringify(wrong));
+  const result = await cli(s.registry, 'list', '--root', s.root);
+  assert.match(result.stdout, new RegExp(`localhost:${wrong.port}/`));
+  assert.equal(result.stdout.split(s.root).length - 1, 1);
+  assert.deepEqual(readdirSync(s.registry), [hello.id + '.json']);
+});
+
+test('discovery does not contact an unregistered server', async t => {
+  const s = await serve(t, 'idle');
+  let requests = 0;
+  const other = createServer((req, res) => { requests++; res.end('{}'); });
+  await new Promise(ok => other.listen(0, '127.0.0.1', ok));
+  t.after(() => new Promise(ok => other.close(ok)));
+  const result = await cli(s.registry, 'list', '--root', s.root);
+  assert.match(result.stdout, /localhost:/);
+  assert.equal(requests, 0);
+  const port = other.address().port;
+  assert.equal((await s.api(`__review/servers/stop?port=${port}`, { method: 'POST' })).code, 400);
+  assert.equal((await s.api(`__review/servers/restart?port=${port}`, { method: 'POST' })).code, 400);
+  assert.equal(requests, 0);
+});
+
+test('normal shutdown removes the registration; discovery removes a record after a crash', async t => {
+  const stopped = await serve(t, 'idle');
+  const port = new URL(stopped.url).port;
+  assert.equal((await stopped.api(`__review/servers/stop?port=${port}`, { method: 'POST' })).code, 200);
+  await stopped.exited;
+  assert.deepEqual(readdirSync(stopped.registry), []);
+  const crashed = await serve(t, 'idle');
+  crashed.child.kill('SIGKILL');
+  await crashed.exited;
+  assert.equal(readdirSync(crashed.registry).length, 1);
+  assert.match((await cli(crashed.registry, 'list')).stdout, /No review servers/);
+  assert.deepEqual(readdirSync(crashed.registry), []);
+});
+
+test('an upgrade registration finds a legacy server and checks its start time', async t => {
+  const s = await serve(t, 'idle');
+  const info = { root: s.root, pid: process.pid, since: new Date().toISOString(), agent: { state: 'idle', text: 'Idle' }, open: 0 };
+  const legacy = createServer((req, res) => res.end(JSON.stringify(info)));
+  await new Promise(ok => legacy.listen(0, '127.0.0.1', ok));
+  t.after(() => new Promise(ok => legacy.close(ok)));
+  const id = randomUUID(), file = join(s.registry, id + '.json');
+  writeFileSync(file, JSON.stringify({ ...info, id, port: legacy.address().port, legacy: true }));
+  assert.match((await cli(s.registry, 'list')).stdout, new RegExp(`localhost:${legacy.address().port}/`));
+  writeFileSync(file, JSON.stringify({ ...info, since: 'different start time', id, port: legacy.address().port, legacy: true }));
+  assert.doesNotMatch((await cli(s.registry, 'list')).stdout, new RegExp(`localhost:${legacy.address().port}/`));
+  assert.equal(readdirSync(s.registry).length, 1);
+});
+
+test('startup uses another free port when the preferred port is occupied', async t => {
+  const s = await serve(t, 'idle');
+  const code = `const { start } = await import(process.argv[1]); console.log(await start(process.argv[2], +process.argv[3]));`;
+  const started = await execute(process.execPath,
+    ['--input-type=module', '-e', code, pathToFileURL(join(HERE, '..', 'servers.mjs')).href, s.root, new URL(s.url).port],
+    { env: { ...process.env, PAGE_REVIEW_REGISTRY: s.registry }, windowsHide: true });
+  const port = +started.stdout.trim();
+  try {
+    assert.ok(port > 0);
+    assert.notEqual(port, +new URL(s.url).port);
+    assert.equal((await s.api('__review/servers')).body.servers.length, 2);
+  } finally { await cli(s.registry, 'stop', '--all'); }
+});
+
+test('the CLI starts projects together, reuses a server, restarts it and stops all servers', async t => {
+  const base = mkdtempSync(join(tmpdir(), 'review-cli-')), registry = join(base, 'registry');
+  const roots = [join(base, 'one'), join(base, 'two')];
+  for (const root of roots) mkdirSync(root);
+  t.after(async () => {
+    await cli(registry, 'stop', '--all');
+    rmSync(base, { recursive: true, force: true, maxRetries: 5 });
+  });
+  const results = await Promise.all(roots.map(root => cli(registry, '--root', root, '--no-browser')));
+  const port = +results[0].stdout.match(/localhost:(\d+)/)[1];
+  assert.equal(readdirSync(registry).length, 2);
+  const reused = await cli(registry, '--root', roots[0], '--no-browser');
+  assert.match(reused.stdout, /already running/);
+  assert.match(reused.stdout, new RegExp(`localhost:${port}/`));
+  assert.match((await cli(registry, 'restart', '--root', roots[0])).stdout, new RegExp(`Restarted: http://localhost:${port}/`));
+  assert.equal(readdirSync(registry).length, 2);
+  assert.equal((await cli(registry, 'stop', '--all')).stdout.match(/Stopped:/g).length, 2);
+  assert.deepEqual(readdirSync(registry), []);
 });
 
 test('pages get the panel; other files and frames do not', async t => {

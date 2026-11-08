@@ -1,19 +1,19 @@
 #!/usr/bin/env node
-// The command `reviewer` (package.json). `reviewer [file ...]` opens files of a project in the review: it finds the review
+// The command `hrev` (package.json). `hrev [file ...]` opens files of a project in the review: it finds the review
 // server of the project, or starts one in the background, then opens each file in the browser. `list`, `stop` and `restart`
 // control the servers. The project folder: --root, else the git work tree of the current folder, else the current folder.
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
-import { samePath, servers, start, stop } from './servers.mjs';
+import { hello, samePath, servers, start, stop } from './servers.mjs';
 
 const USAGE = `Usage:
-  reviewer [file ...]      open pages of the project in the review; no file: the table of contents
-                           file: a path, or the end of a path in the project (docker.html, 07-docker/notes.md)
-  reviewer list            the review servers of this machine
-  reviewer stop [--all]    stop the review server of the project (--all: every review server)
-  reviewer restart         restart the review server of the project
+  hrev [file ...]      open pages of the project in the review; no file: the table of contents
+                      file: a path, or the end of a path in the project (docker.html, 07-docker/notes.md)
+  hrev list           the review servers of this machine
+  hrev stop [--all]    stop the review server of the project (--all: every review server)
+  hrev restart        restart the review server of the project
 Options:
   --root <dir>   the project folder (default: the git work tree of the current folder, else the current folder)
   --no-browser   print the links, open no browser`;
@@ -77,6 +77,11 @@ const run = {
   async restart() {
     const port = opt.port ? +opt.port : mine?.port;
     if (!port) return noServer();
+    const current = await hello(port);
+    if (current && (!current.root || !samePath(current.root, ROOT))) {
+      console.error(`The port ${port} does not belong to the review server for ${ROOT}.`);
+      return void (process.exitCode = 1);
+    }
     if (!(await stop(port))) { console.error(`The server on the port ${port} did not stop.`); return void (process.exitCode = 1); }
     const now = await start(ROOT, port);
     if (!now) { console.error(`The review server did not start. See ${join(ROOT, '.review', 'server.log')}.`); return void (process.exitCode = 1); }

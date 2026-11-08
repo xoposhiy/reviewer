@@ -1,64 +1,79 @@
-// The review servers of this machine: each project has its own server on one of the ports from FIRST_PORT up.
-// A server tells about itself at /__review/hello. The command `reviewer` (open.mjs) and the page of contents use this module.
+// Servers register their addresses at startup. Discovery checks only those addresses.
 import { spawn } from 'node:child_process';
-import { mkdirSync, openSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { processExists, registrations } from './registry.mjs';
 
 const TOOL = dirname(fileURLToPath(import.meta.url));
-export const FIRST_PORT = 8765;
-export const PORTS = Array.from({ length: 20 }, (_, i) => FIRST_PORT + i);
 const START_MS = 10_000, STOP_MS = 10_000;
-
 export const samePath = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
 const sleep = ms => new Promise(ok => setTimeout(ok, ms));
 
-// The answer on the port: {root, pid, since, agent, open} of a review server; BUSY: another program holds the port;
-// null: the port is free.
+// BUSY means that the address did not answer as a review server, or timed out.
 export const BUSY = { root: null };
 export async function hello(port) {
-  let r;
-  try { r = await fetch(`http://127.0.0.1:${port}/__review/hello`, { signal: AbortSignal.timeout(700) }); }
-  catch (e) { return e.name === 'TimeoutError' ? BUSY : null; }
-  return r.ok ? r.json().catch(() => BUSY) : BUSY;
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/__review/hello`, { signal: AbortSignal.timeout(700) });
+    const a = r.ok ? await r.json() : null;
+    return a && typeof a.root === 'string' && Number.isInteger(a.pid) ? a : BUSY;
+  } catch (e) {
+    return e.cause?.code === 'ECONNREFUSED' ? null : BUSY;
+  }
+}
+const matches = (a, info) => a?.root && a.pid === info.pid && samePath(a.root, info.root) &&
+  (a.id === info.id || (info.legacy === true && !a.id && a.since === info.since));
+
+export async function servers() {
+  const found = await Promise.all(registrations().map(async ({ info, remove }) => {
+    if (!processExists(info.pid)) { remove(); return null; }
+    const answer = await hello(info.port);
+    if (matches(answer, info)) return { ...answer, port: info.port };
+    // Keep a live process during a timeout: a busy server can answer on the next request.
+    if (answer !== BUSY) remove();
+    return null;
+  }));
+  return found.filter(Boolean).sort((a, b) => a.port - b.port);
 }
 
-// every port with its answer: [{port, answer}]
-export const scan = async () => Promise.all(PORTS.map(async port => ({ port, answer: await hello(port) })));
-// the running review servers: [{port, root, pid, since, agent, open}]
-export const servers = async () => (await scan()).filter(s => s.answer?.root).map(s => ({ port: s.port, ...s.answer }));
-
-// stop the server on the port and wait until the port is free
 export async function stop(port) {
-  await fetch(`http://127.0.0.1:${port}/__review/quit`, { method: 'POST' }).catch(() => {});
-  for (const end = Date.now() + STOP_MS; Date.now() < end; await sleep(200)) if (!(await hello(port))) return true;
+  const before = await hello(port);
+  if (!before) return true;
+  if (!before.root) return false;
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/__review/quit`, { method: 'POST', signal: AbortSignal.timeout(1000) });
+    if (!r.ok) return false;
+  } catch { return false; }
+  for (const end = Date.now() + STOP_MS; Date.now() < end; await sleep(200)) {
+    const now = await hello(port);
+    if (!now || (now.root && (now.pid !== before.pid || now.since !== before.since))) return true;
+  }
   return false;
 }
 
-// Start a server for the root in the background, on the port `prefer` when it is free, else on the first free port.
-// The server lives on after the caller: its own process group, its output in <root>/.review/server.log. Gives the port or null.
+// The OS chooses a free port. A restart tries its previous port first.
 export async function start(root, prefer) {
   const data = join(root, '.review');
   mkdirSync(data, { recursive: true });
   const log = openSync(join(data, 'server.log'), 'a');
-  const free = (await scan()).filter(s => s.answer === null).map(s => s.port);
-  const order = free.includes(prefer) ? [prefer, ...free.filter(p => p !== prefer)] : free;
-  for (const port of order) {
-    const child = spawn(process.execPath, [join(TOOL, 'server.mjs'), '--root', root, '--port', String(port)],
-      { cwd: root, detached: true, stdio: ['ignore', log, log], windowsHide: true });
-    let exited = false;
-    child.on('exit', () => { exited = true; });
-    for (const end = Date.now() + START_MS; Date.now() < end && !exited; await sleep(200)) {
-      const a = await hello(port);
-      if (a?.root && samePath(a.root, root)) { child.unref(); return port; }
+  try {
+    for (const port of prefer ? [prefer, 0] : [0]) {
+      const child = spawn(process.execPath, [join(TOOL, 'server.mjs'), '--root', root, '--port', String(port)],
+        { cwd: root, detached: true, stdio: ['ignore', log, log], windowsHide: true });
+      let exited = false;
+      child.on('exit', () => { exited = true; });
+      child.on('error', () => { exited = true; });
+      for (const end = Date.now() + START_MS; Date.now() < end && !exited; await sleep(200)) {
+        const entry = registrations().find(({ info }) => info.pid === child.pid);
+        if (entry && matches(await hello(entry.info.port), entry.info)) { child.unref(); return entry.info.port; }
+      }
+      if (!exited) { child.kill(); return null; }
     }
-    // the port was taken in the meantime: try the next one; a server that does not answer is broken
-    if (!exited) { child.kill(); return null; }
-  }
-  return null;
+    return null;
+  } finally { closeSync(log); }
 }
 
-// Restart in a separate process, so that a server can restart itself: the process waits until the old server stops.
+// A separate process lets a server restart itself after it stops.
 export function restartLater(root, port) {
   spawn(process.execPath, [join(TOOL, 'open.mjs'), 'restart', '--root', root, '--port', String(port)],
     { cwd: root, detached: true, stdio: 'ignore', windowsHide: true }).unref();

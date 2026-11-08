@@ -1,6 +1,6 @@
 # reviewer
 
-The source of the agent skill `page-review` and its command `reviewer`.
+The source of the agent skill `page-review` and its command `hrev`.
 
 The skill shows the HTML pages and the Markdown files of a project in the browser with a review panel.
 You leave notes on a page or edit a Markdown file, and a headless Claude Code agent fixes the files.
@@ -24,8 +24,11 @@ The command:
    - Claude Code: `~/.claude/skills/page-review/` (or `$CLAUDE_CONFIG_DIR/skills/page-review/`);
    - Codex: `~/.agents/skills/page-review/`.
 3. Writes `INSTALLED.json` into each copy: this folder, the commit, and whether `skill/` had uncommitted changes.
-4. Installs the command `reviewer` with `npm install -g`. npm links the command to the Claude Code copy.
+4. Installs the command `hrev` (human review) with `npm install -g`. npm links the command to the Claude Code copy and removes the old `reviewer` command.
 5. Lists the running review servers. They run the old code until they restart.
+
+Servers share a registry in `~/.page-review/servers/`. Discovery checks only registered addresses.
+When upgrading from the port-scanning version, the install uses the old discovery once to register running servers.
 
 Options (after `--`, for example `npm run deploy -- --restart`):
 

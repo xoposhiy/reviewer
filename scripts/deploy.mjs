@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// Installs the skill `page-review` from skill/ into Claude Code and Codex, links the command `reviewer` to the Claude Code copy,
+// Installs the skill `page-review` from skill/ into Claude Code and Codex, links the command `hrev` to the Claude Code copy,
 // and restarts the running review servers on request. Run it again after each change: it replaces the installed copies.
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { cpSync, existsSync, lstatSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -65,6 +66,17 @@ if (!opt['skip-tests']) {
   if (!run(process.execPath, ['--test', join(SOURCE, 'test', 'server.test.mjs')])) fail('The tests failed: nothing is installed.');
 }
 
+// The old installed module scans ports. Run it once during the upgrade, before replacing it.
+const legacy = [];
+for (const [, target] of targets) {
+  const file = join(target, 'servers.mjs');
+  if (existsSync(file) && readFileSync(file, 'utf8').includes('export const scan =')) {
+    const old = await import(pathToFileURL(file).href + '?legacy');
+    legacy.push(...await old.servers());
+    break;
+  }
+}
+
 for (const [agent, target] of targets) {
   install(target);
   console.log(`Installed for ${agent}: ${target}`);
@@ -72,8 +84,23 @@ for (const [agent, target] of targets) {
 
 // npm links the command to the installed folder; on Windows npm is a .cmd file, so it needs a shell
 const commandHome = targets[0][1];
-console.log(`Linking the command reviewer to ${commandHome}...`);
-if (!run('npm', ['install', '-g', '--no-fund', '--no-audit', `"${commandHome}"`], { shell: true })) fail('npm could not install the command reviewer.');
+const { register } = await import(pathToFileURL(join(commandHome, 'registry.mjs')).href);
+for (const s of legacy) register({ ...s, id: randomUUID(), legacy: true });
+console.log(`Linking the command hrev to ${commandHome}...`);
+if (!run('npm', ['install', '-g', '--no-fund', '--no-audit', `"${commandHome}"`], { shell: true })) fail('npm could not install the command hrev.');
+
+// npm can leave the old bin files when the linked package.json already has the new bin name.
+const prefix = spawnSync('npm', ['prefix', '-g'], { shell: true, encoding: 'utf8', windowsHide: true });
+if (prefix.status !== 0) fail('npm could not find the global command folder.');
+const binDir = process.platform === 'win32' ? prefix.stdout.trim() : join(prefix.stdout.trim(), 'bin');
+for (const name of process.platform === 'win32' ? ['reviewer', 'reviewer.cmd', 'reviewer.ps1'] : ['reviewer']) {
+  const file = join(binDir, name);
+  if (!existsSync(file)) continue;
+  const owned = lstatSync(file).isSymbolicLink()
+    ? realpathSync(file) === realpathSync(join(commandHome, 'open.mjs'))
+    : process.platform === 'win32' && readFileSync(file, 'utf8').replaceAll('\\', '/').includes('/node_modules/page-review/open.mjs');
+  if (owned) rmSync(file);
+}
 
 const { servers } = await import(pathToFileURL(join(commandHome, 'servers.mjs')).href);
 const running = await servers();
@@ -83,7 +110,7 @@ const busy = s => BUSY_AGENT.has(s.agent?.state);
 const show = s => `  http://localhost:${s.port}/  ${s.root}` + (busy(s) ? `\n    agent: ${s.agent.text}` : '');
 if (!running.length) console.log('No review servers run.');
 else if (!opt.restart) {
-  console.log('These review servers run the old code until they restart (npm run deploy -- --restart, or reviewer restart in the project):');
+  console.log('These review servers run the old code until they restart (npm run deploy -- --restart, or hrev restart in the project):');
   for (const s of running) console.log(show(s));
 } else {
   const refused = opt.force ? [] : running.filter(busy);

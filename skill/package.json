@@ -3,6 +3,6 @@
   "version": "1.0.0",
   "private": true,
   "description": "Review of HTML pages and Markdown files in the browser, with notes that a headless Claude agent fixes.",
-  "bin": { "reviewer": "open.mjs" },
+  "bin": { "hrev": "open.mjs" },
   "engines": { "node": ">=20" }
 }

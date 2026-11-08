@@ -6,21 +6,26 @@ The tool is this folder only: Node.js 20 or newer, no packages. It is the skill 
 (`~/.claude/skills/page-review/`) and Codex (`~/.agents/skills/page-review/`); [SKILL.md](SKILL.md) tells agents when and how to start it.
 
 The source is the repo https://github.com/xoposhiy/reviewer. `npm run deploy` in the repo installs the skill into both agents
-and the command `reviewer` (npm links it to the Claude Code copy).
+and the command `hrev` (npm links it to the Claude Code copy).
 
 Then, from any folder of a project:
 
 ```
-reviewer [file ...]      # open pages in the review; no file: the table of contents
-reviewer docker.html     # a file is a path, or the end of a path in the project
-reviewer list            # the review servers of this computer
-reviewer stop [--all]    # stop the server of the project (--all: every server)
-reviewer restart         # restart the server of the project
+hrev [file ...]      # open pages in the review; no file: the table of contents
+hrev docker.html     # a file is a path, or the end of a path in the project
+hrev list            # the review servers of this computer
+hrev stop [--all]    # stop the server of the project (--all: every server)
+hrev restart         # restart the server of the project
 ```
 
 The project folder is the git work tree of the current folder (or `--root <dir>`). Each project has its own server
-on one of the ports 8765–8784. `reviewer` finds the server of the project, or starts one in the background on the first free port,
+on a free port chosen by the OS. `hrev` finds the server of the project, or starts one in the background,
 and opens each file in the browser. `--no-browser` prints the links only. The output of a server goes to `.review/server.log` of the project.
+Servers record their port, process ID and project folder in `~/.page-review/servers/`, one file per server.
+Discovery checks only registered addresses and verifies each server ID. It removes stale records after a crash.
+A normal exit removes the record at once. `PAGE_REVIEW_REGISTRY` selects another registry folder.
+A restart tries to keep the same port.
+
 Without the command: `node "$HOME/.claude/skills/page-review/open.mjs"` with the same arguments.
 
 To run the server by hand, in the foreground: `node server.mjs` with the options below.
@@ -173,7 +178,8 @@ a click on the status of a working agent, on an "in work" status, or on the agen
 | File | What it is |
 |---|---|
 | `SKILL.md` | The skill: when an agent opens the review, and how it makes pages for it. |
-| `open.mjs` | The command `reviewer` (`package.json`): opens pages, lists, stops and restarts the servers. |
+| `open.mjs` | The command `hrev` (`package.json`): opens pages, lists, stops and restarts the servers. |
+| `registry.mjs` | The server registry shared by the CLI and both installed copies. |
 | `servers.mjs` | The review servers of this computer: find, start, stop, restart. |
 | `server.mjs` | The HTTP server: the pages with the panel, the table of contents and the API. |
 | `store.mjs` | The notes and the replies in the data folder. |

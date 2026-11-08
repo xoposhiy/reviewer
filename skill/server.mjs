@@ -4,6 +4,7 @@
 // The session page (session.html) shows what an agent session does: the panel links to it.
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,9 +12,11 @@ import { parseArgs } from 'node:util';
 import { createStore, CLOSED } from './store.mjs';
 import { createAgent, DELAY_MS, modelOf, MODELS } from './agent.mjs';
 import { parseLog, viewOf } from './session.mjs';
-import { hello, PORTS, restartLater, servers, stop } from './servers.mjs';
+import { restartLater, servers, stop } from './servers.mjs';
+import { register } from './registry.mjs';
 
 const SINCE = new Date().toISOString();
+const ID = randomUUID();
 
 const USAGE = `Usage: node server.mjs [options]
   --root <dir>       the folder with the pages (default: the current folder)
@@ -182,10 +185,11 @@ function quit(res) {
   res.on('finish', () => process.exit(0));
   send(res, 200, { quit: true });
 }
-const portOf = url => {
+const portOf = async url => {
   const port = +url.searchParams.get('port');
-  if (!PORTS.includes(port)) throw new HttpError(400, 'not a port of the review servers');
-  return port;
+  const found = (await servers()).find(s => s.port === port);
+  if (!found) throw new HttpError(400, 'not a registered review server');
+  return found;
 };
 
 // the API of the panel and of the table of contents
@@ -201,20 +205,19 @@ const routes = {
   // servers.mjs finds the server of a folder by this answer, and stops it with quit
   'GET /__review/hello': async (req, res) => {
     const [list, status] = await Promise.all([store.notes(), agent.status()]);
-    send(res, 200, { root: ROOT, tool: TOOL, pid: process.pid, since: SINCE, agent: { state: status.state, text: status.text },
+    send(res, 200, { id: ID, root: ROOT, tool: TOOL, pid: process.pid, since: SINCE, agent: { state: status.state, text: status.text },
       open: list.filter(n => !CLOSED.has(n.status)).length });
   },
   'POST /__review/quit': async (req, res) => quit(res),
   // the review servers of this machine, for the table of contents; this server is `self`
   'GET /__review/servers': async (req, res) => send(res, 200, { self: server.address().port, servers: await servers() }),
   'POST /__review/servers/stop': async (req, res, url) => {
-    const port = portOf(url);
+    const { port } = await portOf(url);
     if (port === server.address().port) return quit(res);
     send(res, 200, { stopped: await stop(port) });
   },
   'POST /__review/servers/restart': async (req, res, url) => {
-    const port = portOf(url), a = await hello(port);
-    if (!a?.root) throw new HttpError(404, 'no review server on this port');
+    const a = await portOf(url), port = a.port;
     restartLater(a.root, port);
     send(res, 200, { restarting: true });
   },
@@ -336,6 +339,10 @@ server.on('error', e => {
   process.exit(1);
 });
 server.listen(+opt.port, '127.0.0.1', async () => {
+  try {
+    const unregister = register({ id: ID, root: ROOT, pid: process.pid, since: SINCE, port: server.address().port });
+    process.on('exit', unregister);
+  } catch (e) { console.error(e.message); process.exit(1); }
   vars.url = `http://localhost:${server.address().port}/`;
   console.log(`Review server: ${vars.url}`);
   console.log(`Pages: ${ROOT}\nNotes: ${DATA}`);
@@ -343,3 +350,4 @@ server.listen(+opt.port, '127.0.0.1', async () => {
 });
 // Ctrl+C stops the agent too; its notes go back to the queue on the next start
 process.on('SIGINT', () => { agent.shutdown(); process.exit(130); });
+process.on('SIGTERM', () => { agent.shutdown(); process.exit(143); });

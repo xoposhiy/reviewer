@@ -29,15 +29,15 @@ Keep it for documents for people: app code, templates, test fixtures and files t
 Run this from the project folder, with the files that the user reads:
 
 ```
-reviewer <file> [file ...]
+hrev <file> [file ...]
 ```
 
 - The command finds the review server of the project (the git work tree, or `--root <dir>`) or starts one in the background, and opens each file in the browser.
 - Give the user the links that it prints.
 - Open a file once in a session. When you change it again, the open page shows the change itself (a "Reload here" banner, or a new render of a Markdown file).
 - The server listens on 127.0.0.1 and later starts `claude`. If a sandbox blocks the command, ask for permission to run it outside the sandbox, or give the user the command.
-- No `reviewer` command: run `node <this folder>/open.mjs` with the same arguments (give the absolute path of `open.mjs`), and tell the user that `npm run deploy` in the source repo of the skill installs the command.
-- `reviewer list`, `reviewer stop [--all]` and `reviewer restart` control the servers, when the user asks; `reviewer --help` lists the options.
+- No `hrev` command: run `node <this folder>/open.mjs` with the same arguments (give the absolute path of `open.mjs`), and tell the user that `npm run deploy` in the source repo of the skill installs the command.
+- `hrev list`, `hrev stop [--all]` and `hrev restart` control the servers, when the user asks; `hrev --help` lists the options.
 
 ## 3. Notes
 

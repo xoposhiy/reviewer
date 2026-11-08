@@ -44,8 +44,9 @@ It lists the pages (HTML and Markdown files) of the folder and of its subfolders
 - The page that you came from (for example by "☰ Contents" in the panel) has the mark "you were here".
 
 At the top: one short line about the agent of the project, for example "Agent works · 2 notes wait" or "3 notes wait · auto in 1:40";
-hover over it for the full status. While the agent works, Stop is next to it. Fix in the panel starts the agent.
-At the bottom: every review server of this computer, with Stop and Restart.
+hover over it for the full status. While the agent works, the line is a link to its session page, and Stop is next to it.
+Fix in the panel starts the agent.
+Under the lists, the section "Review servers of this computer": every review server, with Stop and Restart.
 Not in the lists: dot folders (for example `.git`), `node_modules` and the folder of this tool.
 An `index.html` opens by its name only (`/sub/index.html`): `/sub/` is the table of contents.
 
@@ -167,7 +168,8 @@ The server runs a headless Claude Code (`claude -p --permission-mode auto`) in t
 The page `/` shows the agent status and its output. The server output (`.review/server.log` or the server window) has it too.
 
 The session page (`/__review/session?id=<session>`) shows what one agent session does and did. The panel opens it in a new tab:
-a click on the status of a working agent, on an "in work" status, or on the agent name of a note. The page shows:
+a click on the status of a working agent, on an "in work" status, or on the agent name of a note.
+The status line of a working agent on a table of contents opens it too. The page shows:
 - what the agent does now (a running tool, or the model at work on its next step), and how long it does it;
 - each task of the session with its notes, and each step: the text and the thinking of the model, the tool calls with their input
   and result. Each step has its time: the model time before the step and the tool time. Steps of 30 s and more are yellow, of 2 min and more red;

@@ -21,7 +21,8 @@
   h1 { font-size: 21px; margin: 0 auto 0 0; overflow-wrap: anywhere; }
   h1 a { color: var(--muted); }
   .agent { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); white-space: nowrap; cursor: default; }
-  .agent span::before, .servers .state::before { content: '● '; color: var(--state); }
+  .agent .state::before, .servers .state::before { content: '● '; color: var(--state); }
+  .agent a.state:not([href]) { color: inherit; text-decoration: none; }
   #root { margin: 2px 0 12px; color: var(--faint); font-size: 12.5px; overflow-wrap: anywhere; }
 
   .search { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 12px; padding: 8px 0; background: var(--bg); }
@@ -64,11 +65,11 @@
   .tree summary:hover .into, .tree summary.selected .into { visibility: visible; }
 
   footer { margin-top: 36px; border-top: 1px solid var(--line); padding-top: 8px; }
-  footer details { margin: 4px 0; }
-  footer summary { cursor: pointer; padding: 3px 8px; font-size: 13.5px; color: var(--muted); border-radius: 6px; }
-  footer summary:hover { background: var(--hover); }
-  footer .body { padding: 4px 8px 8px 24px; font-size: 14px; }
-  .servers li { margin: 6px 0; }
+  /* the review servers: a section under the lists of pages, apart from them */
+  section.servers { margin-top: 28px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .servers li { padding: 4px 8px; border-radius: 6px; font-size: 14px; }
+  .servers li:hover { background: var(--hover); }
+  .servers > p { padding: 0 8px; }
   .servers .root { overflow-wrap: anywhere; }
   .servers .line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
   .servers .line span { margin-right: auto; }
@@ -80,7 +81,7 @@
 <body>
 <header>
   <h1 id="title">Review</h1>
-  <div class="agent"><span></span><button hidden title="Stop the agent">Stop</button></div>
+  <div class="agent"><a class="state" target="_blank" rel="noopener"></a><button hidden title="Stop the agent">Stop</button></div>
 </header>
 <p id="root"></p>
 <div class="search">
@@ -88,8 +89,8 @@
   <label hidden title="Show the pages that git ignores"><input type="checkbox"> <span></span></label>
 </div>
 <main></main>
+<section class="servers"><h2>Review servers of this computer <small></small></h2><ul></ul><p class="muted" hidden></p></section>
 <footer>
-  <details class="servers"><summary>Review servers of this computer</summary><div class="body"><ul></ul><p class="muted" hidden></p></div></details>
   <p class="keys"><kbd>/</kbd> find a page · <kbd>↑</kbd> <kbd>↓</kbd> choose · <kbd>Enter</kbd> open · <kbd>←</kbd> <kbd>→</kbd> close or open a folder · <kbd>Esc</kbd> clear the search</p>
 </footer>
 <script>
@@ -310,7 +311,8 @@
   // ---- The agent and the servers ----
 
   // One short line for the agent of this project; the full status is its tooltip. Fix in the panel starts the agent: here is only Stop.
-  const strip = document.querySelector('.agent'), button = strip.querySelector('button');
+  // While the agent works, the line links to the session page: what the agent does, step by step.
+  const strip = document.querySelector('.agent'), line = strip.querySelector('.state'), button = strip.querySelector('button');
   const clockOf = ms => { const s = Math.ceil(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
   function short(a) {
     const notes = `${plural(a.open, 'note')} wait${a.open === 1 ? 's' : ''}`, wait = a.open ? ' · ' + notes : '';
@@ -323,8 +325,9 @@
   }
   function showAgent(a) {
     strip.style.setProperty('--state', STATE_COLOR[a.state]);
-    strip.querySelector('span').textContent = short(a);
-    strip.title = a.text;
+    line.textContent = short(a);
+    strip.title = a.text + (a.session ? '\n\nClick: what the agent does now, in a new tab.' : '');
+    if (a.session) line.href = '/__review/session?id=' + encodeURIComponent(a.session); else line.removeAttribute('href');
     button.hidden = a.state !== 'working';
   }
   button.onclick = () => { button.hidden = true; post('agent/stop').then(showAgent).catch(() => {}); };
@@ -340,14 +343,14 @@
     if (gone) return;
     const { self, servers } = await fetch('/__review/servers').then(r => r.json()).catch(() => ({ servers: [] }));
     known = servers;
-    box.querySelector('summary').textContent = `Review servers of this computer (${servers.length})`;
+    box.querySelector('h2 small').textContent = servers.length;
     list.innerHTML = servers.map(s => `<li style="--state: ${STATE_COLOR[s.agent?.state] || '#888'}"><div class="line">` +
       `<span><a href="http://localhost:${s.port}/">localhost:${s.port}</a>${s.port === self ? ' <b>(this one)</b>' : ''}</span>` +
       `<button data-do="stop" data-port="${s.port}">Stop</button><button data-do="restart" data-port="${s.port}">Restart</button></div>` +
       `<div class="root">${esc(s.root)}</div>` +
       `<div class="muted">${s.pid ? `<span class="state">${esc(s.agent.text)}</span> · ${s.open} open note(s) · since ${time(s.since)}`
         : 'An older version of the tool: restart it.'}</div></li>`).join('')
-      || '<li>None.</li>';
+      || '<li class="muted">None.</li>';
   }
   // A restart of this server: wait until a new server (another process) answers, then load the page again.
   async function waitForNew(pid) {

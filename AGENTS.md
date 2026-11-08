@@ -1,6 +1,6 @@
 # reviewer
 
-This repo is the source of the agent skill `page-review` and its command `reviewer`. The skill shows the HTML pages and
+This repo is the source of the agent skill `page-review` and its command `hrev`. The skill shows the HTML pages and
 the Markdown files of a project in the browser with a review panel: the reviewer leaves notes or edits a Markdown file,
 and a headless Claude Code agent fixes the files. The tool is in `skill/` (Node.js 20, no packages, tests in `skill/test/`),
 and `scripts/deploy.mjs` installs the skill for Claude Code and Codex. [README.md](README.md) tells more.
